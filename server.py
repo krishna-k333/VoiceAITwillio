@@ -392,6 +392,28 @@ async def api_setup_inbound_trunk(provider: str = "voicelink"):
         session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ctx))
         lk = lk_api.LiveKitAPI(url=url, api_key=key, api_secret=secret, session=session)
 
+        # ── Clean up any existing inbound trunks for this DID + their dispatch rules ──
+        try:
+            existing_trunks = await lk.sip.list_sip_inbound_trunk(lk_api.ListSIPInboundTrunkRequest())
+            stale_trunk_ids = [t.sip_trunk_id for t in existing_trunks.items if did_number in (t.numbers or [])]
+            if stale_trunk_ids:
+                existing_rules = await lk.sip.list_sip_dispatch_rule(lk_api.ListSIPDispatchRuleRequest())
+                for r in existing_rules.items:
+                    if any(tid in (r.trunk_ids or []) for tid in stale_trunk_ids) or not r.trunk_ids:
+                        try:
+                            await lk.sip.delete_sip_dispatch_rule(
+                                lk_api.DeleteSIPDispatchRuleRequest(sip_dispatch_rule_id=r.sip_dispatch_rule_id)
+                            )
+                        except Exception:
+                            pass
+                for tid in stale_trunk_ids:
+                    try:
+                        await lk.sip.delete_sip_trunk(lk_api.DeleteSIPTrunkRequest(sip_trunk_id=tid))
+                    except Exception:
+                        pass
+        except Exception as _ce:
+            logger.warning(f"Inbound cleanup skipped: {_ce}")
+
         trunk = await lk.sip.create_sip_inbound_trunk(
             lk_api.CreateSIPInboundTrunkRequest(
                 trunk=lk_api.SIPInboundTrunkInfo(
@@ -412,7 +434,9 @@ async def api_setup_inbound_trunk(provider: str = "voicelink"):
                 ),
                 trunk_ids=[trunk_id],
                 name=f"{trunk_name} Dispatch",
-                attributes={"agent_name": "outbound-caller"},
+                room_config=lk_api.RoomConfiguration(
+                    agents=[lk_api.RoomAgentDispatch(agent_name="outbound-caller")],
+                ),
             )
         )
 
