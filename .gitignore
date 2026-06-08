@@ -1,14 +1,53 @@
+﻿# Environment
 .env
+.env.*
+!.env.example
+
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
-*.db
-*.sqlite
-*.log
-venv/
-.venv/
-node_modules/
+*.pyd
 *.egg-info/
 dist/
 build/
+.eggs/
+*.egg
+venv/
+.venv/
+env/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# OS
 .DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Secrets / keys
+*.pem
+*.key
+*.p12
+service_account*.json
+credentials*.json
+token*.json
+KMS
+
+# Recordings / media
+recordings/
+*.ogg
+*.mp3
+*.wav

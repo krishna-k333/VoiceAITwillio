@@ -353,6 +353,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         if sip_provider == "voicelink":
             trunk_id = os.getenv("VOICELINK_TRUNK_ID") or os.getenv("OUTBOUND_TRUNK_ID")
             tool_ctx._sip_domain = os.getenv("VOICELINK_SIP_DOMAIN", "")
+        elif sip_provider == "telnyx":
+            trunk_id = os.getenv("TELNYX_TRUNK_ID") or os.getenv("OUTBOUND_TRUNK_ID")
+            tool_ctx._sip_domain = "sip.telnyx.com"
+        elif sip_provider == "twilio":
+            trunk_id = os.getenv("TWILIO_TRUNK_ID") or os.getenv("OUTBOUND_TRUNK_ID")
+            tool_ctx._sip_domain = os.getenv("TWILIO_SIP_TRUNK_DOMAIN", "")
         else:
             trunk_id = os.getenv("VOBIZ_TRUNK_ID") or os.getenv("OUTBOUND_TRUNK_ID")
             tool_ctx._sip_domain = os.getenv("VOBIZ_SIP_DOMAIN", "")
@@ -366,7 +372,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             tech_prefix = os.getenv("VOICELINK_TECH_PREFIX", "")
             dial_number = tech_prefix + phone_number.lstrip("+") if tech_prefix else phone_number
         else:
-            dial_number = phone_number
+            dial_number = phone_number  # Telnyx, Vobiz, and Twilio all use plain E.164
         await _log("info", f"Dialing {phone_number} via SIP trunk {trunk_id} (provider={sip_provider}, dial={dial_number})")
         try:
             await ctx.api.sip.create_sip_participant(

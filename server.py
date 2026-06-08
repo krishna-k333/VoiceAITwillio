@@ -316,6 +316,26 @@ async def api_setup_trunk(provider: str = "vobiz"):
         phone      = await eff("VOICELINK_OUTBOUND_NUMBER")
         trunk_id_setting = "VOICELINK_TRUNK_ID"
         trunk_name = "VoiceLink Outbound Trunk"
+    elif provider == "telnyx":
+        url      = await eff("LIVEKIT_URL")
+        key      = await eff("LIVEKIT_API_KEY")
+        secret   = await eff("LIVEKIT_API_SECRET")
+        sip_domain = "sip.telnyx.com"
+        username   = await eff("TELNYX_USERNAME")
+        password   = await eff("TELNYX_PASSWORD")
+        phone      = await eff("TELNYX_OUTBOUND_NUMBER")
+        trunk_id_setting = "TELNYX_TRUNK_ID"
+        trunk_name = "Telnyx Outbound Trunk"
+    elif provider == "twilio":
+        url      = await eff("LIVEKIT_URL")
+        key      = await eff("LIVEKIT_API_KEY")
+        secret   = await eff("LIVEKIT_API_SECRET")
+        sip_domain = await eff("TWILIO_SIP_TRUNK_DOMAIN")
+        username   = await eff("TWILIO_SIP_USERNAME")
+        password   = await eff("TWILIO_SIP_PASSWORD")
+        phone      = await eff("TWILIO_OUTBOUND_NUMBER")
+        trunk_id_setting = "TWILIO_TRUNK_ID"
+        trunk_name = "Twilio Outbound Trunk"
     else:
         url      = await eff("LIVEKIT_URL")
         key      = await eff("LIVEKIT_API_KEY")
@@ -337,16 +357,19 @@ async def api_setup_trunk(provider: str = "vobiz"):
         ctx.verify_mode = ssl.CERT_NONE
         session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ctx))
         lk = lk_api.LiveKitAPI(url=url, api_key=key, api_secret=secret, session=session)
+        trunk_info = lk_api.SIPOutboundTrunkInfo(
+            name=trunk_name,
+            address=sip_domain,
+            auth_username=username,
+            auth_password=password,
+            numbers=[phone],
+        )
+        # Telnyx requires username in the first INVITE to force credential auth
+        # (prevents accidental IP-based routing to a different account)
+        if provider == "telnyx":
+            trunk_info.headers["X-Telnyx-Username"] = username
         trunk = await lk.sip.create_sip_outbound_trunk(
-            lk_api.CreateSIPOutboundTrunkRequest(
-                trunk=lk_api.SIPOutboundTrunkInfo(
-                    name=trunk_name,
-                    address=sip_domain,
-                    auth_username=username,
-                    auth_password=password,
-                    numbers=[phone],
-                )
-            )
+            lk_api.CreateSIPOutboundTrunkRequest(trunk=trunk_info)
         )
         trunk_id = trunk.sip_trunk_id
         await set_setting(trunk_id_setting, trunk_id)
@@ -375,6 +398,16 @@ async def api_setup_inbound_trunk(provider: str = "voicelink"):
         allowed_ip   = "160.30.71.89"
         trunk_name   = "VoiceLink Inbound Trunk"
         setting_key  = "VOICELINK_INBOUND_TRUNK_ID"
+    elif provider == "telnyx":
+        did_number   = await eff("TELNYX_OUTBOUND_NUMBER")
+        allowed_ip   = ""
+        trunk_name   = "Telnyx Inbound Trunk"
+        setting_key  = "TELNYX_INBOUND_TRUNK_ID"
+    elif provider == "twilio":
+        did_number   = await eff("TWILIO_INBOUND_NUMBER") or await eff("TWILIO_OUTBOUND_NUMBER")
+        allowed_ip   = ""
+        trunk_name   = "Twilio Inbound Trunk"
+        setting_key  = "TWILIO_INBOUND_TRUNK_ID"
     else:
         did_number   = await eff("VOBIZ_OUTBOUND_NUMBER")
         allowed_ip   = ""
@@ -592,6 +625,16 @@ INBOUND_PERSONAS = {
         "use_case": "Festival Greeting Calls",
         "description": "Sends personalized Holi greetings on behalf of Krishna Aggarwal. Short 15-20 second warm and festive wish calls.",
         "color": "#e91e63",
+    },
+    "hvac_demo": {
+        "id": "hvac_demo",
+        "name": "CoolBreeze HVAC",
+        "agent_name": "Alex",
+        "voice": "Aoede",
+        "language": "English",
+        "use_case": "HVAC Inbound Receptionist",
+        "description": "24/7 AI dispatcher for CoolBreeze HVAC. Triages emergencies, books service visits, and handles the full inbound call flow with natural HVAC terminology.",
+        "color": "#0077b6",
     },
     "real_estate": {
         "id": "real_estate",

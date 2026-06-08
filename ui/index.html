@@ -1112,7 +1112,7 @@ tbody tr:hover td { background: var(--gray-50); }
                 <div class="form-group"><label>Key Benefit 3</label><input type="text" id="f-benefit-3" value="pre-launch pricing sirf is week tak available hai, baad mein rate badh jaayega" /></div>
                 <div class="agent-form-grid">
                   <div class="form-group"><label>Agent Profile</label><select id="f-agent-profile"><option value="">— Default —</option></select></div>
-                  <div class="form-group"><label>SIP Provider</label><select id="f-sip-provider"><option value="vobiz">Vobiz</option><option value="voicelink">VoiceLink</option></select></div>
+                  <div class="form-group"><label>SIP Provider</label><select id="f-sip-provider"><option value="vobiz">Vobiz</option><option value="voicelink">VoiceLink</option><option value="telnyx">Telnyx</option><option value="twilio">Twilio</option></select></div>
                 </div>
                 <div class="form-group">
                   <label style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:500">
@@ -1143,7 +1143,7 @@ tbody tr:hover td { background: var(--gray-50); }
             <h2>Configure Batch</h2>
             <div class="agent-form-grid">
               <div class="form-group"><label>Agent Profile</label><select id="bc-agent-profile"><option value="">— Default —</option></select></div>
-              <div class="form-group"><label>SIP Provider</label><select id="bc-sip-provider"><option value="vobiz">Vobiz</option><option value="voicelink">VoiceLink</option></select></div>
+              <div class="form-group"><label>SIP Provider</label><select id="bc-sip-provider"><option value="vobiz">Vobiz</option><option value="voicelink">VoiceLink</option><option value="telnyx">Telnyx</option><option value="twilio">Twilio</option></select></div>
             </div>
             <div class="form-group">
               <label>CSV File <span class="text-muted text-sm">(columns: phone, lead_name, business_name, service_type)</span></label>
@@ -1183,7 +1183,7 @@ tbody tr:hover td { background: var(--gray-50); }
             <div class="form-group"><label>Delay Between Calls (s)</label><input type="number" id="camp-delay" value="3" min="1" /></div>
           </div>
           <div class="agent-form-grid">
-            <div class="form-group"><label>SIP Provider</label><select id="camp-sip-provider"><option value="vobiz">Vobiz</option><option value="voicelink">VoiceLink</option></select></div>
+            <div class="form-group"><label>SIP Provider</label><select id="camp-sip-provider"><option value="vobiz">Vobiz</option><option value="voicelink">VoiceLink</option><option value="telnyx">Telnyx</option><option value="twilio">Twilio</option></select></div>
             <div class="form-group"><label>Agent Profile</label><select id="camp-agent-profile"><option value="">— Default —</option></select></div>
           </div>
           <div class="form-group">
@@ -1453,7 +1453,7 @@ tbody tr:hover td { background: var(--gray-50); }
         <div class="settings-group">
           <h3><i data-lucide="phone"></i> SIP Provider</h3>
           <div class="agent-form-grid">
-            <div class="form-group"><label>Active Provider</label><select id="s-SIP_PROVIDER" onchange="toggleSIPProvider()"><option value="vobiz">Vobiz (vobiz.ai)</option><option value="voicelink">VoiceLink (voicelink.co.in)</option></select></div>
+            <div class="form-group"><label>Active Provider</label><select id="s-SIP_PROVIDER" onchange="toggleSIPProvider()"><option value="vobiz">Vobiz (vobiz.ai)</option><option value="voicelink">VoiceLink (voicelink.co.in)</option><option value="telnyx">Telnyx (telnyx.com)</option><option value="twilio">Twilio (international)</option></select></div>
             <div class="form-group"><label>Transfer Fallback Number</label><input type="text" id="s-DEFAULT_TRANSFER_NUMBER" placeholder="+919876543210" /></div>
           </div>
         </div>
@@ -1487,6 +1487,39 @@ tbody tr:hover td { background: var(--gray-50); }
           <div class="flex gap8">
             <button class="btn-primary btn-sm" onclick="saveGroup('voicelink')"><i data-lucide="save"></i> Save VoiceLink</button>
             <button class="btn-warn btn-sm" onclick="createSIPTrunk('voicelink')"><i data-lucide="zap"></i> Create VoiceLink Trunk in LiveKit</button>
+          </div>
+        </div>
+
+        <div class="settings-group hidden" id="sip-telnyx-group">
+          <h3><i data-lucide="server"></i> Telnyx Credentials <span class="configured" id="telnyx-configured" style="display:none"><i data-lucide="check-circle-2" style="width:11px;height:11px"></i> configured</span></h3>
+          <p style="font-size:12px;color:var(--muted);margin:0 0 8px">SIP domain is always <code>sip.telnyx.com</code> — get credentials from Mission Control → Voice → SIP Connections → Outbound Auth.</p>
+          <div class="agent-form-grid">
+            <div class="form-group"><label>Username</label><input type="text" id="s-TELNYX_USERNAME" /></div>
+            <div class="form-group"><label>Password</label><div class="flex"><input type="password" id="s-TELNYX_PASSWORD" style="flex:1" /><button class="btn-muted btn-sm" onclick="toggleField('s-TELNYX_PASSWORD')"><i data-lucide="eye"></i></button></div></div>
+          </div>
+          <div class="agent-form-grid">
+            <div class="form-group"><label>Outbound Number (E.164)</label><input type="text" id="s-TELNYX_OUTBOUND_NUMBER" placeholder="+14155550100" /></div>
+          </div>
+          <div class="flex gap8">
+            <button class="btn-primary btn-sm" onclick="saveGroup('telnyx')"><i data-lucide="save"></i> Save Telnyx</button>
+            <button class="btn-warn btn-sm" onclick="createSIPTrunk('telnyx')"><i data-lucide="zap"></i> Create Telnyx Trunk in LiveKit</button>
+          </div>
+        </div>
+
+        <div class="settings-group hidden" id="sip-twilio-group">
+          <h3><i data-lucide="server"></i> Twilio SIP Credentials <span class="configured" id="twilio-sip-configured" style="display:none"><i data-lucide="check-circle-2" style="width:11px;height:11px"></i> configured</span></h3>
+          <p style="font-size:12px;color:var(--muted);margin:0 0 8px">Get from Twilio Console → Elastic SIP Trunking → your trunk. Enable Geo Permissions for each country you want to call.</p>
+          <div class="agent-form-grid">
+            <div class="form-group"><label>SIP Trunk Domain</label><input type="text" id="s-TWILIO_SIP_TRUNK_DOMAIN" placeholder="your-trunk.pstn.twilio.com" /></div>
+            <div class="form-group"><label>Outbound Number (E.164)</label><input type="text" id="s-TWILIO_OUTBOUND_NUMBER" placeholder="+18663376843" /></div>
+          </div>
+          <div class="agent-form-grid">
+            <div class="form-group"><label>Credential List Username</label><input type="text" id="s-TWILIO_SIP_USERNAME" /></div>
+            <div class="form-group"><label>Credential List Password</label><div class="flex"><input type="password" id="s-TWILIO_SIP_PASSWORD" style="flex:1" /><button class="btn-muted btn-sm" onclick="toggleField('s-TWILIO_SIP_PASSWORD')"><i data-lucide="eye"></i></button></div></div>
+          </div>
+          <div class="flex gap8">
+            <button class="btn-primary btn-sm" onclick="saveGroup('twilio-sip')"><i data-lucide="save"></i> Save Twilio SIP</button>
+            <button class="btn-warn btn-sm" onclick="createSIPTrunk('twilio')"><i data-lucide="zap"></i> Create Twilio Trunk in LiveKit</button>
           </div>
         </div>
 
@@ -1663,6 +1696,7 @@ tbody tr:hover td { background: var(--gray-50); }
             <select class="input" id="ib-provider-select" style="width:auto">
               <option value="vobiz">Vobiz</option>
               <option value="voicelink">VoiceLink</option>
+              <option value="telnyx">Telnyx</option>
             </select>
             <button class="btn btn-primary" onclick="createInboundTrunk()">
               <i data-lucide="plus-circle"></i> Create Inbound Trunk
@@ -1674,7 +1708,7 @@ tbody tr:hover td { background: var(--gray-50); }
         <div class="card" style="background:var(--gray-50);border:1px solid var(--gray-200)">
           <div style="font-family:var(--font-head);font-weight:700;font-size:0.9rem;margin-bottom:12px">Setup Checklist</div>
           <div style="display:flex;flex-direction:column;gap:10px;font-size:0.82rem;color:var(--text-2)">
-            <div>1. Configure your SIP provider credentials in <strong>Outbound → Settings</strong> (Vobiz or VoiceLink section).</div>
+            <div>1. Configure your SIP provider credentials in <strong>Outbound → Settings</strong> (Vobiz, VoiceLink, or Telnyx section).</div>
             <div>2. Set your <strong>Inbound DID number</strong> (the phone number customers will call) in Settings under the provider section.</div>
             <div>3. Click <strong>Create Inbound Trunk</strong> above to register the trunk and dispatch rule in LiveKit.</div>
             <div>4. Start the <strong>inbound agent</strong>: <code style="background:var(--gray-200);padding:1px 5px;border-radius:4px">python agent.py start</code> in the livekitbro directory.</div>
@@ -2362,15 +2396,10 @@ function toggleField(id) {
 
 function toggleSIPProvider() {
   const provider = $('s-SIP_PROVIDER').value;
-  const vobizGroup = $('sip-vobiz-group');
-  const vlGroup = $('sip-voicelink-group');
-  if (provider === 'voicelink') {
-    vobizGroup.classList.add('hidden');
-    vlGroup.classList.remove('hidden');
-  } else {
-    vobizGroup.classList.remove('hidden');
-    vlGroup.classList.add('hidden');
-  }
+  $('sip-vobiz-group').classList.toggle('hidden', provider !== 'vobiz');
+  $('sip-voicelink-group').classList.toggle('hidden', provider !== 'voicelink');
+  $('sip-telnyx-group').classList.toggle('hidden', provider !== 'telnyx');
+  $('sip-twilio-group').classList.toggle('hidden', provider !== 'twilio');
 }
 
 async function saveGroup(group) {
@@ -2379,7 +2408,9 @@ async function saveGroup(group) {
     gemini: ['GOOGLE_API_KEY','GEMINI_MODEL','GEMINI_TTS_VOICE','USE_GEMINI_REALTIME','DEEPGRAM_API_KEY'],
     vobiz: ['VOBIZ_SIP_DOMAIN','VOBIZ_USERNAME','VOBIZ_PASSWORD','VOBIZ_OUTBOUND_NUMBER','DEFAULT_TRANSFER_NUMBER'],
     voicelink: ['VOICELINK_SIP_DOMAIN','VOICELINK_USERNAME','VOICELINK_PASSWORD','VOICELINK_OUTBOUND_NUMBER','DEFAULT_TRANSFER_NUMBER'],
+    telnyx: ['TELNYX_USERNAME','TELNYX_PASSWORD','TELNYX_OUTBOUND_NUMBER'],
     twilio: ['TWILIO_ACCOUNT_SID','TWILIO_AUTH_TOKEN','TWILIO_FROM_NUMBER'],
+    'twilio-sip': ['TWILIO_SIP_TRUNK_DOMAIN','TWILIO_SIP_USERNAME','TWILIO_SIP_PASSWORD','TWILIO_OUTBOUND_NUMBER'],
     s3: ['S3_ACCESS_KEY_ID','S3_SECRET_ACCESS_KEY','S3_ENDPOINT_URL','S3_REGION','S3_BUCKET'],
     calcom: ['CALCOM_API_KEY','CALCOM_EVENT_TYPE_ID','CALCOM_TIMEZONE'],
   }[group] || [];
@@ -2394,7 +2425,7 @@ async function saveGroup(group) {
 
 window.createSIPTrunk = async (provider) => {
   provider = provider || $('s-SIP_PROVIDER').value;
-  const name = provider === 'voicelink' ? 'VoiceLink' : 'Vobiz';
+  const name = provider === 'voicelink' ? 'VoiceLink' : provider === 'telnyx' ? 'Telnyx' : provider === 'twilio' ? 'Twilio' : 'Vobiz';
   if (!confirm(`Create SIP trunk in LiveKit using ${name} settings?`)) return;
   try { const r = await apiPost(`/api/setup/trunk?provider=${provider}`, {}); toast(`SIP trunk created: ${r.trunk_id} (${name})`); loadSettings(); }
   catch(e) { toast(`SIP trunk creation failed — check ${name} and LiveKit credentials`, 'err'); }
