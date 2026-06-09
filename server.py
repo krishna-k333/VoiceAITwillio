@@ -5,8 +5,10 @@ import json
 import logging
 import os
 import random
+import secrets
 import ssl
 import sys
+import time
 import certifi
 import aiohttp
 from pathlib import Path
@@ -24,6 +26,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
 
 _orig_ssl = ssl.create_default_context
 def _certifi_ssl(purpose=ssl.Purpose.SERVER_AUTH, **kwargs):
@@ -43,6 +46,8 @@ from db import (
 from prompts import DEFAULT_SYSTEM_PROMPT
 
 load_dotenv(".env", override=True)
+ADMIN_EMAIL    = os.getenv("ADMIN_EMAIL", "").strip()
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("server")
 
@@ -57,6 +62,93 @@ except ImportError:
     logger.warning("APScheduler not installed — campaign scheduling disabled")
 
 app = FastAPI(title="OutboundAI Dashboard", version="1.0.0")
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+_SESSIONS: dict = {}   # token → expiry timestamp
+_SESSION_TTL = 86400   # 24 hours
+
+_LOGIN_HTML = """<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>MooreRevenue AI — Sign In</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'DM Sans',sans-serif;background:linear-gradient(145deg,#EAE6D8 0%,#F2EDD4 35%,#F8F3C6 65%,#F5E878 100%);min-height:100vh;display:flex;align-items:center;justify-content:center}
+.card{background:#1A1A1A;border-radius:24px;padding:48px 40px;width:100%;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,.2)}
+.logo{display:flex;align-items:center;gap:12px;margin-bottom:32px}
+.logo-mark{width:44px;height:44px;background:#F0C132;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px}
+.logo-name{font-family:'Sora',sans-serif;font-weight:700;font-size:18px;color:#fff}
+.logo-sub{font-size:12px;color:rgba(255,255,255,.35)}
+h2{font-family:'Sora',sans-serif;font-size:22px;font-weight:700;color:#fff;margin-bottom:6px}
+.sub{color:rgba(255,255,255,.4);font-size:14px;margin-bottom:28px}
+label{display:block;font-size:11px;font-weight:600;color:rgba(255,255,255,.5);margin-bottom:6px;letter-spacing:.06em;text-transform:uppercase}
+input{width:100%;background:rgba(255,255,255,.07);border:1.5px solid rgba(255,255,255,.12);border-radius:10px;color:#fff;font-family:'DM Sans',sans-serif;font-size:15px;padding:12px 14px;outline:none;transition:border-color .2s}
+input:focus{border-color:#F0C132}
+input::placeholder{color:rgba(255,255,255,.2)}
+.field{margin-bottom:16px}
+.err{color:#E8453C;font-size:13px;margin-bottom:14px;min-height:18px}
+button{width:100%;background:#F0C132;color:#1A1A1A;border:none;border-radius:10px;font-family:'Sora',sans-serif;font-weight:700;font-size:15px;padding:14px;cursor:pointer;transition:background .15s,transform .1s;margin-top:4px}
+button:hover{background:#F7DB6E}
+button:active{transform:scale(.98)}
+button:disabled{opacity:.6;cursor:not-allowed;transform:none}
+</style></head>
+<body>
+<div class="card">
+  <div class="logo">
+    <div class="logo-mark">&#128222;</div>
+    <div><div class="logo-name">MooreRevenue AI</div><div class="logo-sub">Admin Dashboard</div></div>
+  </div>
+  <h2>Welcome back</h2>
+  <p class="sub">Enter your admin credentials to continue.</p>
+  <form id="f">
+    <div class="field"><label>Email</label><input type="email" id="e" placeholder="admin@example.com" autocomplete="username" required/></div>
+    <div class="field"><label>Password</label><input type="password" id="p" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;" autocomplete="current-password" required/></div>
+    <div id="err" class="err"></div>
+    <button type="submit" id="btn">Sign In</button>
+  </form>
+</div>
+<script>
+document.getElementById('f').addEventListener('submit',async ev=>{
+  ev.preventDefault();
+  const btn=document.getElementById('btn'),err=document.getElementById('err');
+  btn.disabled=true;btn.textContent='Signing in…';err.textContent='';
+  try{
+    const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:document.getElementById('e').value,password:document.getElementById('p').value})});
+    if(r.ok){window.location.href='/';return;}
+    const d=await r.json().catch(()=>({}));
+    err.textContent=d.detail||'Invalid credentials';
+  }catch(ex){err.textContent='Network error. Please try again.';}
+  btn.disabled=false;btn.textContent='Sign In';
+});
+</script>
+</body></html>"""
+
+
+def _check_session(token: str) -> bool:
+    if not token:
+        return False
+    exp = _SESSIONS.get(token)
+    if exp is None or time.time() > exp:
+        _SESSIONS.pop(token, None)
+        return False
+    return True
+
+
+class _AuthMiddleware(BaseHTTPMiddleware):
+    _PUBLIC = {"/api/login", "/api/logout", "/api/auth/check"}
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if not path.startswith("/api/") or path in self._PUBLIC:
+            return await call_next(request)
+        token = request.cookies.get("dashboard_session", "")
+        if not _check_session(token):
+            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+        return await call_next(request)
+
+
+app.add_middleware(_AuthMiddleware)
 
 
 @app.on_event("startup")
@@ -136,14 +228,54 @@ class StatusRequest(BaseModel):
     status: str
 
 
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
-async def serve_dashboard():
+async def serve_dashboard(request: Request):
+    token = request.cookies.get("dashboard_session", "")
+    if not _check_session(token):
+        return HTMLResponse(_LOGIN_HTML)
     html_path = Path(__file__).parent / "ui" / "index.html"
     if html_path.exists():
         return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
     return HTMLResponse("<h1>Dashboard not found — place index.html in ui/</h1>", status_code=404)
+
+
+@app.post("/api/login")
+async def api_login(req: LoginRequest):
+    if not ADMIN_EMAIL or not ADMIN_PASSWORD:
+        raise HTTPException(500, "ADMIN_EMAIL / ADMIN_PASSWORD not set in .env")
+    email_ok = secrets.compare_digest(req.email.strip().lower(), ADMIN_EMAIL.lower())
+    pass_ok  = secrets.compare_digest(req.password, ADMIN_PASSWORD)
+    if not (email_ok and pass_ok):
+        raise HTTPException(401, "Invalid email or password")
+    token = secrets.token_urlsafe(32)
+    _SESSIONS[token] = time.time() + _SESSION_TTL
+    resp = JSONResponse({"status": "ok"})
+    resp.set_cookie("dashboard_session", token, httponly=True, samesite="lax", max_age=_SESSION_TTL)
+    return resp
+
+
+@app.post("/api/logout")
+async def api_logout(request: Request):
+    token = request.cookies.get("dashboard_session", "")
+    _SESSIONS.pop(token, None)
+    resp = JSONResponse({"status": "logged out"})
+    resp.delete_cookie("dashboard_session")
+    return resp
+
+
+@app.get("/api/auth/check")
+async def api_auth_check(request: Request):
+    token = request.cookies.get("dashboard_session", "")
+    if not _check_session(token):
+        raise HTTPException(401, "Not authenticated")
+    return {"status": "authenticated"}
 
 
 # ── Call dispatch ─────────────────────────────────────────────────────────────

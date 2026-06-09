@@ -507,7 +507,7 @@ async def get_cut_calls_stats() -> dict:
 
 import math as _math
 
-_RATE_PER_MIN = 6.5  # ₹ per billed minute — internal only
+_RATE_PER_MIN = 5.0  # ₹ per billed minute — internal only
 
 
 def _billed_minutes(seconds: int) -> float:

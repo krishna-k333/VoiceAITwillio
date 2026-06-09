@@ -208,6 +208,28 @@ a [data-lucide] { width: 12px; height: 12px; }
   font-family: var(--font-body);
 }
 
+.logout-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: calc(100% - 20px);
+  margin: 0 10px 6px;
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.4);
+  font-size: 13px;
+  font-family: var(--font-body);
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+  text-align: left;
+}
+.logout-btn:hover {
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.75);
+}
+
 /* ── Main content ── */
 .main-wrap {
   flex: 1;
@@ -995,6 +1017,7 @@ tbody tr:hover td { background: var(--gray-50); }
     </div><!-- /inbound-nav -->
 
     <div class="sidebar-footer">
+      <button class="logout-btn" onclick="logout()"><i data-lucide="log-out"></i> <span>Sign Out</span></button>
       <div class="sidebar-footer-text">v1.0 · AI-Powered</div>
     </div>
   </aside>
@@ -1808,11 +1831,19 @@ document.querySelectorAll('.nav-btn[data-stab]').forEach(b => {
 // UTILITIES
 // ═══════════════════════════════════════════════════════════════════
 const $ = id => document.getElementById(id);
-const api = (path, opts = {}) => fetch(path, opts).then(r => r.ok ? r.json() : Promise.reject(r));
+const api = (path, opts = {}) => fetch(path, opts).then(r => {
+  if (r.status === 401) { window.location.href = '/'; return Promise.reject(new Error('Unauthorized')); }
+  return r.ok ? r.json() : Promise.reject(r);
+});
 const apiPost = (path, body) => fetch(path, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
 const apiPatch = (path, body) => fetch(path, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
 const apiPut = (path, body) => fetch(path, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
 const apiDel = path => fetch(path, {method:'DELETE'});
+async function logout() {
+  await fetch('/api/logout', {method: 'POST'}).catch(() => {});
+  window.location.href = '/';
+}
+
 let _toastTimer;
 
 function toast(msg, type='ok') {
