@@ -353,16 +353,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # ── Dial — MUST come before session.start() ──────────────────────────────
     if phone_number and not is_inbound:
         if sip_provider == "voicelink":
-            trunk_id = os.getenv("VOICELINK_TRUNK_ID") or os.getenv("OUTBOUND_TRUNK_ID")
+            trunk_id = await get_setting("VOICELINK_TRUNK_ID", "") or os.getenv("VOICELINK_TRUNK_ID") or os.getenv("OUTBOUND_TRUNK_ID")
             tool_ctx._sip_domain = os.getenv("VOICELINK_SIP_DOMAIN", "")
         elif sip_provider == "telnyx":
-            trunk_id = os.getenv("TELNYX_TRUNK_ID") or os.getenv("OUTBOUND_TRUNK_ID")
+            trunk_id = await get_setting("TELNYX_TRUNK_ID", "") or os.getenv("TELNYX_TRUNK_ID") or os.getenv("OUTBOUND_TRUNK_ID")
             tool_ctx._sip_domain = "sip.telnyx.com"
         elif sip_provider == "twilio":
-            trunk_id = os.getenv("TWILIO_TRUNK_ID") or os.getenv("OUTBOUND_TRUNK_ID")
-            tool_ctx._sip_domain = os.getenv("TWILIO_SIP_TRUNK_DOMAIN", "")
+            trunk_id = await get_setting("TWILIO_TRUNK_ID", "") or os.getenv("TWILIO_TRUNK_ID") or os.getenv("OUTBOUND_TRUNK_ID")
+            tool_ctx._sip_domain = await get_setting("TWILIO_SIP_TRUNK_DOMAIN", "") or os.getenv("TWILIO_SIP_TRUNK_DOMAIN", "")
         else:
-            trunk_id = os.getenv("VOBIZ_TRUNK_ID") or os.getenv("OUTBOUND_TRUNK_ID")
+            trunk_id = await get_setting("VOBIZ_TRUNK_ID", "") or os.getenv("VOBIZ_TRUNK_ID") or os.getenv("OUTBOUND_TRUNK_ID")
             tool_ctx._sip_domain = os.getenv("VOBIZ_SIP_DOMAIN", "")
 
         if not trunk_id:
