@@ -277,7 +277,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             voice_override  = data.get("voice_override")
             model_override  = data.get("model_override")
             tools_override  = data.get("tools_override")
-            sip_provider    = data.get("sip_provider", sip_provider)
+            sip_provider    = os.getenv("SIP_PROVIDER") or data.get("sip_provider", sip_provider)
             is_inbound      = data.get("inbound", False)
         except (json.JSONDecodeError, AttributeError):
             await _log("warning", "Invalid JSON in job metadata")
