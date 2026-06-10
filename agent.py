@@ -67,7 +67,7 @@ def load_db_settings_to_env() -> None:
         client = create_client(url, key)
         result = client.table("settings").select("key, value").execute()
         for row in (result.data or []):
-            if row.get("value"):
+            if row.get("value") and row["key"] not in os.environ:
                 os.environ[row["key"]] = row["value"]
     except Exception as exc:
         logger.warning("Could not load settings from Supabase: %s", exc)
