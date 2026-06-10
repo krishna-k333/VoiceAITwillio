@@ -322,7 +322,7 @@ async def api_dispatch_call(req: CallRequest):
         "business_name": req.business_name,
         "service_type": req.service_type,
         "system_prompt": effective_prompt,
-        "sip_provider": req.sip_provider or await get_setting("SIP_PROVIDER", "vobiz"),
+        "sip_provider": req.sip_provider or await get_setting("SIP_PROVIDER", "twilio"),
     }
     for _field in ("agent_name", "project_name", "project_type", "project_location",
                    "project_status", "key_benefit_1", "key_benefit_2", "key_benefit_3",
@@ -823,7 +823,7 @@ async def api_get_inbound_status():
 
 async def _dispatch_one(lk, lk_api, contact: dict, room_name: str,
                          prompt: Optional[str], profile: Optional[dict] = None,
-                         sip_provider: str = "vobiz") -> bool:
+                         sip_provider: str = "twilio") -> bool:
     try:
         saved_prompt = prompt or (await get_setting("system_prompt", "")) or None
         metadata: dict = {
@@ -859,7 +859,7 @@ async def _run_campaign(campaign_id: str) -> None:
     delay = int(campaign.get("call_delay_seconds") or 3)
     prompt = campaign.get("system_prompt")
     agent_profile_id = campaign.get("agent_profile_id")
-    sip_provider = await get_setting("SIP_PROVIDER", "vobiz")
+    sip_provider = await get_setting("SIP_PROVIDER", "twilio")
     profile = None
     if agent_profile_id:
         profile = await get_agent_profile(agent_profile_id)

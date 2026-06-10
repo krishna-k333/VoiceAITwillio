@@ -253,7 +253,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     voice_override: Optional[str] = None
     model_override: Optional[str] = None
     tools_override: Optional[str] = None
-    sip_provider = "vobiz"
+    sip_provider = "twilio"
     is_inbound = False
 
     if ctx.job.metadata:
