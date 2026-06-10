@@ -278,6 +278,11 @@ async def api_auth_check(request: Request):
     return {"status": "authenticated"}
 
 
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok"}
+
+
 # ── Call dispatch ─────────────────────────────────────────────────────────────
 
 @app.post("/api/call")
