@@ -303,6 +303,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 os.environ["GEMINI_TTS_VOICE"] = voice_override
             if business_name in ("our company", ""):
                 business_name = _inbound_persona_data.get("name", business_name)
+            if _inbound_persona_data.get("agent_name"):
+                agent_name_var = _inbound_persona_data["agent_name"]
             await _log("info", f"Inbound persona loaded: {_persona_id} ({_inbound_persona_data.get('name', '')}), voice={voice_override}")
         except Exception as _pe:
             await _log("warning", f"Could not load inbound persona: {_pe}")

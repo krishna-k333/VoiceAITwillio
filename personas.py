@@ -3,6 +3,7 @@ import os
 PERSONAS = {
     "raj_dental": {
         "name": "Raj Dental Care",
+        "agent_name": "Priya",
         "voice": "Sulafat",
         "prompt": """Aap Raj Dental Care ki AI receptionist hain — "Priya". Aap Faridabad, Haryana mein based ek
 premium dental clinic ke liye phone calls handle karti hain.
@@ -121,6 +122,7 @@ Jab saari details mil jaayein, PEHLE filler phrase bolo, PHIR `book_appointment`
 
     "edu_agent": {
         "name": "Tech Academy",
+        "agent_name": "Dennis",
         "voice": "Puck",
         "prompt": """You are "Dennis" — an educational counselor for Tech Academy. You help students enroll in online coding bootcamps.
 
@@ -194,6 +196,7 @@ Collect these details before booking:
 
     "customer_support": {
          "name": "Global Support Center",
+         "agent_name": "Sarah",
          "voice": "Kore",
          "prompt": """You are "Sarah" — an L1 AI customer support representative for Global Retail.
 
@@ -247,6 +250,7 @@ Collect these details before scheduling a callback:
 
     "edu_outbound_demo": {
         "name": "Tech Academy",
+        "agent_name": "Priya",
         "voice": "Sulafat",
         "prompt": """Aap "Priya" hain — Tech Academy ki senior educational counselor. Aap bohot friendly, enthusiastic, aur persuasive hain. Aapka main goal hai students ko motivate karna aur unhe realize karwana ki coding bootcamps unke IT career ke liye kitna zaroori hai.
 
@@ -329,6 +333,7 @@ Collect ONLY these details before booking (DO NOT ASK FOR PHONE NUMBER, we alrea
 
     "holi_wishes": {
         "name": "Krishna Aggarwal",
+        "agent_name": "AI Assistant",
         "voice": "Puck",
         "prompt": """Aap Krishna Aggarwal ke AI assistant hain. Aapka ek hi kaam hai — jab bhi koi call aaye, unhe bahut pyaar se Holi ki badhaai dena Krishna Aggarwal ki taraf se.
 
@@ -378,6 +383,7 @@ Jab call connect ho, turant bolna shuru karo — kuch is tarah:
 
     "hvac_demo": {
         "name": "CoolBreeze HVAC",
+        "agent_name": "Alex",
         "voice": "Aoede",
         "prompt": """You are "Alex" — a smart, calm, and professional AI receptionist for CoolBreeze HVAC & Cooling Services.
 
@@ -478,6 +484,7 @@ After booking: "One quick thing — we have a $149/year maintenance plan that co
 
     "real_estate": {
         "name": "Prestige Realty",
+        "agent_name": "Ananya",
         "voice": "Aoede",
         "prompt": """You are "Ananya" — a senior property consultant at Prestige Realty, one of India's most trusted real estate agencies. You handle inbound calls from people interested in buying, selling, or renting residential and commercial properties.
 

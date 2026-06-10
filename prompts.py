@@ -233,10 +233,17 @@ def build_prompt(
     if not project_name:
         project_name = business_name
 
+    _no_regreet = (
+        f"CRITICAL — DO NOT GREET OR INTRODUCE YOURSELF: "
+        f"The opening line \"Hi, this is {agent_name} from {business_name}, how can I help you?\" "
+        f"has ALREADY been spoken as pre-recorded audio. "
+        f"Do NOT say any greeting, your name, or the business name at the start. "
+        f"Wait silently and respond only to what the caller says next.\n\n"
+    )
     if custom_prompt:
-        template = custom_prompt
+        template = _no_regreet + custom_prompt
     elif inbound:
-        template = INBOUND_SYSTEM_PROMPT
+        template = _no_regreet + INBOUND_SYSTEM_PROMPT
     else:
         template = DEFAULT_SYSTEM_PROMPT
     try:
