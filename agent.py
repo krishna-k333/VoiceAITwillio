@@ -417,11 +417,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview")
     opening_voice = voice_override or os.getenv("GEMINI_TTS_VOICE", "Aoede")
     if is_inbound:
-        opening_line = f"Thank you for calling {business_name}. How can I help you today?"
+        opening_line = f"Hi, this is {agent_name_var} from {business_name}, how can I help you?"
     elif phone_number:
-        opening_line = f"Hi! {lead_name} ji se baat ho rahi hai?"
+        opening_line = f"Hi, this is {agent_name_var} from {business_name}, how can I help you?"
     else:
-        opening_line = "Hi! Kaise madad kar sakti hoon aapki?"
+        opening_line = f"Hi, this is {agent_name_var} from {business_name}, how can I help you?"
 
     # gemini-3.1 hard-blocks generate_reply() — must use TTS pre-gen for opener.
     # Start the TTS task NOW (overlaps with session.start) to minimize latency.
