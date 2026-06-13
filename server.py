@@ -153,6 +153,10 @@ app.add_middleware(_AuthMiddleware)
 
 @app.on_event("startup")
 async def _startup():
+    # Ensure SIP_PROVIDER env var always wins over stale DB value
+    env_provider = os.getenv("SIP_PROVIDER")
+    if env_provider:
+        await set_setting("SIP_PROVIDER", env_provider)
     if _scheduler:
         _scheduler.start()
         await _reschedule_all_campaigns()
@@ -439,7 +443,7 @@ async def api_save_settings(req: SettingsRequest):
 # ── SIP trunk setup ───────────────────────────────────────────────────────────
 
 @app.post("/api/setup/trunk")
-async def api_setup_trunk(provider: str = "vobiz"):
+async def api_setup_trunk(provider: str = "twilio"):
     url = key = secret = sip_domain = username = password = phone = ""
     trunk_id_setting = ""
 
