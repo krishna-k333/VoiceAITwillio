@@ -16,7 +16,7 @@ DEFAULTS = {
     "GEMINI_MODEL":            os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview"),
     "GEMINI_TTS_VOICE":        os.getenv("GEMINI_TTS_VOICE", "Aoede"),
     "USE_GEMINI_REALTIME":     os.getenv("USE_GEMINI_REALTIME", "true"),
-    "SIP_PROVIDER":             os.getenv("SIP_PROVIDER", "vobiz"),
+    "SIP_PROVIDER":             os.getenv("SIP_PROVIDER", "twilio"),
     "VOBIZ_SIP_DOMAIN":        os.getenv("VOBIZ_SIP_DOMAIN", ""),
     "VOBIZ_USERNAME":          os.getenv("VOBIZ_USERNAME", ""),
     "VOBIZ_PASSWORD":          os.getenv("VOBIZ_PASSWORD", ""),
