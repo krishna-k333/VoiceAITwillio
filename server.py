@@ -156,10 +156,16 @@ async def _startup():
     # Ensure SIP_PROVIDER env var always wins over stale DB value
     env_provider = os.getenv("SIP_PROVIDER")
     if env_provider:
-        await set_setting("SIP_PROVIDER", env_provider)
+        try:
+            await set_setting("SIP_PROVIDER", env_provider)
+        except Exception as exc:
+            logger.warning("Could not sync SIP_PROVIDER to Supabase: %s", exc)
     if _scheduler:
-        _scheduler.start()
-        await _reschedule_all_campaigns()
+        try:
+            _scheduler.start()
+            await _reschedule_all_campaigns()
+        except Exception as exc:
+            logger.warning("Could not reschedule campaigns: %s", exc)
 
 
 @app.on_event("shutdown")

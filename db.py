@@ -78,8 +78,6 @@ def init_db() -> None:
 # ── Settings ─────────────────────────────────────────────────────────────────
 
 async def get_all_settings() -> dict:
-    db = await _adb()
-    result = await db.table("settings").select("key, value").execute()
     KNOWN_KEYS = [
         "LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET",
         "GOOGLE_API_KEY", "GEMINI_MODEL", "GEMINI_TTS_VOICE", "USE_GEMINI_REALTIME",
@@ -101,14 +99,19 @@ async def get_all_settings() -> dict:
             out[k] = {"value": "", "configured": bool(env_val)}
         else:
             out[k] = {"value": env_val, "configured": bool(env_val)}
-    for row in (result.data or []):
-        k, v = row["key"], row["value"]
-        if k == "TEST_KEY":
-            continue
-        if k in SENSITIVE_KEYS:
-            out[k] = {"value": "", "configured": bool(v)}
-        else:
-            out[k] = {"value": v, "configured": bool(v)}
+    try:
+        db = await _adb()
+        result = await db.table("settings").select("key, value").execute()
+        for row in (result.data or []):
+            k, v = row["key"], row["value"]
+            if k == "TEST_KEY":
+                continue
+            if k in SENSITIVE_KEYS:
+                out[k] = {"value": "", "configured": bool(v)}
+            else:
+                out[k] = {"value": v, "configured": bool(v)}
+    except Exception:
+        pass
     return out
 
 
@@ -125,10 +128,13 @@ async def save_settings(data: dict) -> None:
 
 
 async def get_setting(key: str, default: str = "") -> str:
-    db = await _adb()
-    result = await db.table("settings").select("value").eq("key", key).maybe_single().execute()
-    if result and result.data:
-        return result.data["value"]
+    try:
+        db = await _adb()
+        result = await db.table("settings").select("value").eq("key", key).maybe_single().execute()
+        if result and result.data:
+            return result.data["value"]
+    except Exception:
+        pass
     return _default(key) or default
 
 
@@ -603,9 +609,12 @@ async def create_campaign(
 
 
 async def get_all_campaigns() -> list:
-    db = await _adb()
-    result = await db.table("campaigns").select("*").order("created_at", desc=True).execute()
-    return result.data or []
+    try:
+        db = await _adb()
+        result = await db.table("campaigns").select("*").order("created_at", desc=True).execute()
+        return result.data or []
+    except Exception:
+        return []
 
 
 async def get_campaign(campaign_id: str) -> Optional[dict]:
