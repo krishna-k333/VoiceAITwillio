@@ -237,7 +237,12 @@ class LoginRequest(BaseModel):
     password: str
 
 
-# ── Dashboard ─────────────────────────────────────────────────────────────────
+# ── Dashboard & Health ────────────────────────────────────────────────────────
+
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok"}
+
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_dashboard(request: Request):

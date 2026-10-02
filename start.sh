@@ -17,10 +17,16 @@ echo "[outboundai] SIP:     ${SIP_PROVIDER:-twilio}"
 echo "[outboundai] Starting FastAPI server on port 8000..."
 uvicorn server:app --host 0.0.0.0 --port 8000 &
 SERVER_PID=$!
+cleanup() {
+    echo "[outboundai] Shutting down..."
+    kill $SERVER_PID 2>/dev/null || true
+    exit 0
+}
+trap cleanup SIGTERM SIGINT
 
 sleep 2
 
 echo "[outboundai] Starting LiveKit agent worker..."
 python agent.py start
 
-kill $SERVER_PID 2>/dev/null || true
+cleanup
