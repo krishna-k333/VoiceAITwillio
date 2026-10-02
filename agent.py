@@ -120,7 +120,7 @@ def _build_session(tools: list, system_prompt: str) -> AgentSession:
 
     ⚠️ EndSensitivity MUST use full string form: END_SENSITIVITY_LOW (not .LOW — AttributeError!)
     """
-    gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview")
+    gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.8-live")
     gemini_voice = os.getenv("GEMINI_TTS_VOICE", "Aoede")
     use_realtime = os.getenv("USE_GEMINI_REALTIME", "true").lower() != "false"
 
@@ -171,54 +171,44 @@ class OutboundAssistant(Agent):
         super().__init__(instructions=instructions)
 
 
-# ── Opening line via Gemini TTS ──────────────────────────────────────────────
-# gemini-3.1 hard-blocks generate_reply(), so the model can't greet first.
-# We synthesize a fixed opening line with Gemini TTS (uses the same AI Studio
-# GOOGLE_API_KEY — no Google Cloud creds needed) in the same voice as the native
-# model, then play it through session.say(audio=...). On the human's reply the
-# native realtime model takes over normally.
-
-async def _gen_opening_pcm(text: str, voice: str) -> bytes:
-    """Generate opening-line speech as L16 PCM 24kHz mono. Returns raw PCM bytes."""
-    from google import genai as _genai
-    from google.genai import types as _gt2
-    api_key = os.getenv("GOOGLE_API_KEY", "")
-    tts_model = os.getenv("OPENING_LINE_TTS_MODEL", "gemini-2.5-flash-preview-tts")
-    client = _genai.Client(api_key=api_key)
-    loop = asyncio.get_event_loop()
-    resp = await loop.run_in_executor(None, lambda: client.models.generate_content(
-        model=tts_model,
-        contents=text,
-        config=_gt2.GenerateContentConfig(
-            response_modalities=["AUDIO"],
-            speech_config=_gt2.SpeechConfig(
-                voice_config=_gt2.VoiceConfig(
-                    prebuilt_voice_config=_gt2.PrebuiltVoiceConfig(voice_name=voice)
-                )
-            ),
-        ),
-    ))
-    return resp.candidates[0].content.parts[0].inline_data.data
-
-
-async def _play_opening_line(session: AgentSession, text: str, pcm: bytes) -> None:
-    """Play pre-generated PCM as the agent's first utterance via session.say()."""
-    sample_rate = 24000           # Gemini TTS returns 24kHz
-    frame_samples = sample_rate // 50   # 20ms frames
-    frame_bytes = frame_samples * 2     # 16-bit mono → 2 bytes/sample
-
-    async def _frames():
-        for i in range(0, len(pcm), frame_bytes):
-            chunk = pcm[i:i + frame_bytes]
-            if len(chunk) < frame_bytes:
-                chunk = chunk + b"\x00" * (frame_bytes - len(chunk))
-            yield rtc.AudioFrame(
-                data=chunk, sample_rate=sample_rate,
-                num_channels=1, samples_per_channel=frame_samples,
+# ── Background S3 Recording Helper ──────────────────────────────────────────
+async def _start_s3_recording(ctx: agents.JobContext, tool_ctx: AppointmentTools) -> None:
+    """Start S3 recording in the background without blocking greeting or session start."""
+    aws_key = os.getenv("S3_ACCESS_KEY_ID") or os.getenv("AWS_ACCESS_KEY_ID", "")
+    aws_secret = os.getenv("S3_SECRET_ACCESS_KEY") or os.getenv("AWS_SECRET_ACCESS_KEY", "")
+    aws_bucket = os.getenv("S3_BUCKET") or os.getenv("AWS_BUCKET_NAME", "")
+    s3_endpoint = os.getenv("S3_ENDPOINT_URL") or os.getenv("S3_ENDPOINT", "")
+    s3_region = os.getenv("S3_REGION") or os.getenv("AWS_REGION", "ap-northeast-1")
+    if aws_key and aws_secret and aws_bucket:
+        try:
+            recording_path = f"recordings/{ctx.room.name}.ogg"
+            egress_req = api.RoomCompositeEgressRequest(
+                room_name=ctx.room.name,
+                audio_only=True,
+                file_outputs=[
+                    api.EncodedFileOutput(
+                        file_type=api.EncodedFileType.OGG,
+                        filepath=recording_path,
+                        s3=api.S3Upload(
+                            access_key=aws_key,
+                            secret=aws_secret,
+                            bucket=aws_bucket,
+                            region=s3_region,
+                            endpoint=s3_endpoint,
+                        ),
+                    )
+                ],
             )
-
-    handle = session.say(text, audio=_frames(), add_to_chat_ctx=False)
-    await handle.wait_for_playout()
+            egress = await ctx.api.egress.start_room_composite_egress(egress_req)
+            ep = s3_endpoint.rstrip("/")
+            tool_ctx.recording_url = (
+                f"{ep}/{aws_bucket}/{recording_path}"
+                if ep
+                else f"s3://{aws_bucket}/{recording_path}"
+            )
+            await _log("info", f"Recording started: egress={egress.egress_id}")
+        except Exception as exc:
+            await _log("warning", f"Recording start failed (non-fatal): {exc}")
 
 
 async def entrypoint(ctx: agents.JobContext) -> None:
@@ -410,26 +400,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     elif is_inbound:
         tool_ctx._call_start_time = time.time()
 
-    # ── Decide opening line + pre-generate it (overlaps session.start) ────────
-    from datetime import datetime as _dt
-    from zoneinfo import ZoneInfo
-    _hour = _dt.now(ZoneInfo("Asia/Kolkata")).hour
-    _tod = "morning" if _hour < 12 else "afternoon" if _hour < 16 else "evening"
-
-    gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview")
+    gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.8-live")
     opening_voice = voice_override or os.getenv("GEMINI_TTS_VOICE", "Aoede")
-    if is_inbound:
-        opening_line = f"Hi, this is {agent_name_var} from {business_name}, how can I help you?"
-    elif phone_number:
-        opening_line = f"Hi, this is {agent_name_var} from {business_name}, how can I help you?"
-    else:
-        opening_line = f"Hi, this is {agent_name_var} from {business_name}, how can I help you?"
-
-    # gemini-3.1 hard-blocks generate_reply() — must use TTS pre-gen for opener.
-    # Start the TTS task NOW (overlaps with session.start) to minimize latency.
-    # If TTS doesn't finish within 4s, fall back to generate_reply() instead.
-    _needs_tts_opener = "3.1" in gemini_model
-    _opening_task = asyncio.create_task(_gen_opening_pcm(opening_line, opening_voice)) if _needs_tts_opener else None
 
     # ── Build and start Gemini Live ──────────────────────────────────────────
     await _log("info", f"Building AI session — model={gemini_model}")
@@ -553,63 +525,29 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             await _log("info", "SIP participant already gone before listener setup — flagging disconnect")
             _disconnect_event.set()
 
-    # ── Optional S3 recording ────────────────────────────────────────────────
+    # ── Optional S3 recording (runs in background so greeting is instant) ────
     if phone_number:
-        _aws_key    = os.getenv("S3_ACCESS_KEY_ID") or os.getenv("AWS_ACCESS_KEY_ID", "")
-        _aws_secret = os.getenv("S3_SECRET_ACCESS_KEY") or os.getenv("AWS_SECRET_ACCESS_KEY", "")
-        _aws_bucket = os.getenv("S3_BUCKET") or os.getenv("AWS_BUCKET_NAME", "")
-        _s3_endpoint = os.getenv("S3_ENDPOINT_URL") or os.getenv("S3_ENDPOINT", "")
-        _s3_region  = os.getenv("S3_REGION") or os.getenv("AWS_REGION", "ap-northeast-1")
-        if _aws_key and _aws_secret and _aws_bucket:
-            try:
-                _recording_path = f"recordings/{ctx.room.name}.ogg"
-                _egress_req = api.RoomCompositeEgressRequest(
-                    room_name=ctx.room.name, audio_only=True,
-                    file_outputs=[api.EncodedFileOutput(
-                        file_type=api.EncodedFileType.OGG, filepath=_recording_path,
-                        s3=api.S3Upload(access_key=_aws_key, secret=_aws_secret,
-                                        bucket=_aws_bucket, region=_s3_region, endpoint=_s3_endpoint),
-                    )],
-                )
-                _egress = await ctx.api.egress.start_room_composite_egress(_egress_req)
-                _s3_ep = _s3_endpoint.rstrip("/")
-                tool_ctx.recording_url = (f"{_s3_ep}/{_aws_bucket}/{_recording_path}"
-                                           if _s3_ep else f"s3://{_aws_bucket}/{_recording_path}")
-                await _log("info", f"Recording started: egress={_egress.egress_id}")
-            except Exception as _exc:
-                await _log("warning", f"Recording start failed (non-fatal): {_exc}")
+        asyncio.create_task(_start_s3_recording(ctx, tool_ctx))
 
-    # ── Greeting — make the agent SPEAK FIRST ─────────────────────────────────
-    if _needs_tts_opener and _opening_task is not None:
-        try:
-            pcm = await asyncio.wait_for(_opening_task, timeout=4.0)
-            await _play_opening_line(session, opening_line, pcm)
-            await _log("info", f"Opening line spoken via TTS: '{opening_line}'")
-        except Exception as _op_exc:
-            await _log("warning", f"TTS opening failed, falling back to generate_reply: {_op_exc}")
-            try:
-                if is_inbound:
-                    _gr = "The call just connected. Greet the caller warmly right now and ask how you can help."
-                elif phone_number:
-                    _gr = f"Call abhi connect hui hai. TURANT bolo — kaho: 'Hi! {lead_name} ji se baat ho rahi hai?'"
-                else:
-                    _gr = "Abhi warmly greet karo — kaho 'Hi! Kaise madad kar sakta/sakti hoon aapki?'"
-                await session.generate_reply(instructions=_gr)
-            except Exception:
-                pass
+    # ── Greeting — AI greets natively in ~1 second (zero recorded audio) ─────
+    if is_inbound:
+        greeting = (
+            f"The call just connected. In one short, warm natural sentence, greet the caller as {agent_name_var} from {business_name} "
+            f"and ask how you can help them today."
+        )
+    elif phone_number:
+        greeting = (
+            f"The call just connected with {lead_name}. In one short natural sentence, say: "
+            f"'Hi! Am I speaking with {lead_name}? This is {agent_name_var} from {business_name}.'"
+        )
     else:
-        if is_inbound:
-            greeting = "The call just connected. Greet the caller warmly right now and ask how you can help."
-        elif phone_number:
-            greeting = (f"Call abhi connect hui hai. TURANT bolo — wait mat karo. "
-                        f"Kaho: 'Hi! {lead_name} ji se baat ho rahi hai?'")
-        else:
-            greeting = "Abhi warmly greet karo — kaho 'Hi! Kaise madad kar sakta/sakti hoon aapki?'"
-        try:
-            await session.generate_reply(instructions=greeting)
-            await _log("info", "Greeting triggered via generate_reply — agent speaking first")
-        except Exception as _gr_exc:
-            await _log("warning", f"generate_reply failed: {_gr_exc}")
+        greeting = f"The call just connected. Greet the caller warmly in one short sentence as {agent_name_var} from {business_name}."
+
+    try:
+        await session.generate_reply(instructions=greeting)
+        await _log("info", "Greeting triggered natively via Gemini Live generate_reply — agent speaking first")
+    except Exception as _gr_exc:
+        await _log("warning", f"generate_reply failed: {_gr_exc}")
 
     # ── Wait for SIP participant to leave, then fallback-log if needed ────────
     if phone_number or is_inbound:

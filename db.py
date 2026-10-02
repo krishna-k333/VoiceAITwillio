@@ -13,7 +13,7 @@ DEFAULTS = {
     "LIVEKIT_API_KEY":         os.getenv("LIVEKIT_API_KEY", ""),
     "LIVEKIT_API_SECRET":      os.getenv("LIVEKIT_API_SECRET", ""),
     "GOOGLE_API_KEY":          os.getenv("GOOGLE_API_KEY", ""),
-    "GEMINI_MODEL":            os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview"),
+    "GEMINI_MODEL":            os.getenv("GEMINI_MODEL", "gemini-3.8-live"),
     "GEMINI_TTS_VOICE":        os.getenv("GEMINI_TTS_VOICE", "Aoede"),
     "USE_GEMINI_REALTIME":     os.getenv("USE_GEMINI_REALTIME", "true"),
     "SIP_PROVIDER":             os.getenv("SIP_PROVIDER", "twilio"),
