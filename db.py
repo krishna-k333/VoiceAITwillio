@@ -342,28 +342,47 @@ def _normalize_call_durations(rows: list) -> list:
 
 
 async def get_all_calls(page: int = 1, limit: int = 20) -> list:
-    db = await _adb()
-    offset = (page - 1) * limit
-    result = await db.table("call_logs").select("*").order("timestamp", desc=True).range(offset, offset + limit - 1).execute()
-    return _normalize_call_durations(result.data or [])
+    try:
+        db = await _adb()
+        offset = (page - 1) * limit
+        result = await db.table("call_logs").select("*").order("timestamp", desc=True).range(offset, offset + limit - 1).execute()
+        return _normalize_call_durations(result.data or [])
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger("outbound-agent").warning(f"get_all_calls fallback (DB offline): {exc}")
+        return []
 
 
 async def get_calls_by_phone(phone: str) -> list:
-    db = await _adb()
-    result = await db.table("call_logs").select("*").eq("phone_number", phone).order("timestamp", desc=True).execute()
-    return _normalize_call_durations(result.data or [])
+    try:
+        db = await _adb()
+        result = await db.table("call_logs").select("*").eq("phone_number", phone).order("timestamp", desc=True).execute()
+        return _normalize_call_durations(result.data or [])
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger("outbound-agent").warning(f"get_calls_by_phone fallback (DB offline): {exc}")
+        return []
 
 
 async def update_call_notes(call_id: str, notes: str) -> bool:
-    db = await _adb()
-    result = await db.table("call_logs").update({"notes": notes}).eq("id", call_id).execute()
-    return len(result.data or []) > 0
+    try:
+        db = await _adb()
+        result = await db.table("call_logs").update({"notes": notes}).eq("id", call_id).execute()
+        return len(result.data or []) > 0
+    except Exception:
+        return False
 
 
 async def get_contacts() -> list:
-    db = await _adb()
-    result = await db.table("call_logs").select("*").order("timestamp", desc=True).execute()
-    rows = result.data or []
+    try:
+        db = await _adb()
+        result = await db.table("call_logs").select("*").order("timestamp", desc=True).execute()
+        rows = result.data or []
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger("outbound-agent").warning(f"get_contacts fallback (DB offline): {exc}")
+        return []
+
     contacts: dict = {}
     for row in rows:
         phone = row["phone_number"]
@@ -382,8 +401,19 @@ async def get_contacts() -> list:
 # ── Stats ─────────────────────────────────────────────────────────────────────
 
 async def get_stats() -> dict:
-    db = await _adb()
-    rows = (await db.table("call_logs").select("outcome, duration_seconds, timestamp").execute()).data or []
+    empty_stats = {
+        "total_calls": 0, "booked": 0, "not_interested": 0,
+        "avg_duration_seconds": 0, "booking_rate_percent": 0.0,
+        "outcomes": {}, "timeline": [], "duration_by_outcome": {},
+    }
+    try:
+        db = await _adb()
+        rows = (await db.table("call_logs").select("outcome, duration_seconds, timestamp").execute()).data or []
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger("outbound-agent").warning(f"get_stats fallback (DB offline): {exc}")
+        return empty_stats
+
     total_calls    = len(rows)
     booked         = sum(1 for r in rows if r.get("outcome") == "booked")
     not_interested = sum(1 for r in rows if r.get("outcome") == "not_interested")
@@ -422,24 +452,29 @@ async def get_stats() -> dict:
 
 async def get_cut_calls_stats() -> dict:
     """Stats for calls that were cut/hung-up. Works with or without the ended_by column."""
-    db = await _adb()
+    rows = []
+    has_ended_by = True
     try:
-        rows = (
-            await db.table("call_logs")
-            .select("id, phone_number, lead_name, outcome, reason, duration_seconds, timestamp, ended_by")
-            .order("timestamp", desc=True)
-            .execute()
-        ).data or []
-        has_ended_by = True
-    except Exception:
-        # ended_by column not yet migrated — fall back to selecting without it
-        rows = (
-            await db.table("call_logs")
-            .select("id, phone_number, lead_name, outcome, reason, duration_seconds, timestamp")
-            .order("timestamp", desc=True)
-            .execute()
-        ).data or []
-        has_ended_by = False
+        db = await _adb()
+        try:
+            rows = (
+                await db.table("call_logs")
+                .select("id, phone_number, lead_name, outcome, reason, duration_seconds, timestamp, ended_by")
+                .order("timestamp", desc=True)
+                .execute()
+            ).data or []
+        except Exception:
+            rows = (
+                await db.table("call_logs")
+                .select("id, phone_number, lead_name, outcome, reason, duration_seconds, timestamp")
+                .order("timestamp", desc=True)
+                .execute()
+            ).data or []
+            has_ended_by = False
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger("outbound-agent").warning(f"get_cut_calls_stats fallback (DB offline): {exc}")
+        rows = []
 
     total_calls = len(rows)
 
