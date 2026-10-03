@@ -68,7 +68,7 @@ async def _run_actor(actor: str, payload: dict, timeout_s: int = 150, memory: in
         # waitForFinish on Apify caps at 60s, so poll instead.
         deadline = time.time() + timeout_s
         while status not in ("SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT") and time.time() < deadline:
-            await asyncio.sleep(5)
+            await asyncio.sleep(3)
             try:
                 check = await client.get(
                     f"https://api.apify.com/v2/actor-runs/{run_id}",
@@ -161,7 +161,7 @@ async def _scrape(target: str) -> tuple[str, str, str]:
                 "crawlerType": "playwright:adaptive",
                 "saveMarkdown": True,
                 "useSitemaps": False,
-                "maxConcurrency": 2,
+                "maxConcurrency": 4,
                 "proxyConfiguration": {"useApifyProxy": True},
             },
             timeout_s=180,

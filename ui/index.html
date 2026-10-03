@@ -4042,6 +4042,7 @@
       }, 18000); // rotate every 18 seconds
 
       try {
+        const checkedTools = collectCheckedTools('persona-tools-grid');
         const r = await fetch('/api/personas/build', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -4050,12 +4051,16 @@
             direction: $('persona-direction').value,
             audio_mode: $('persona-audio').value,
             voice: $('persona-voice').value,
+            enabled_tools: JSON.stringify(checkedTools),
             save: true,
           }),
         });
         let data = {};
         try { data = await r.json(); } catch (_) {}
         if (!r.ok) {
+          if (r.status === 504) {
+            throw new Error('Build is taking longer than expected. The server is still finishing in the background — reload in 1 minute to see the persona.');
+          }
           const msg = data.detail || `Server returned ${r.status}`;
           throw new Error(msg);
         }

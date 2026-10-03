@@ -171,7 +171,7 @@ class _AuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if not path.startswith("/api/") or path in self._PUBLIC:
             return await call_next(request)
-        if path.startswith("/api/agents") and _agent_api_key_ok(request):
+        if (path.startswith("/api/agents") or path.startswith("/api/personas")) and _agent_api_key_ok(request):
             return await call_next(request)
         token = request.cookies.get("dashboard_session", "")
         if not _check_session(token):
@@ -490,6 +490,7 @@ class PersonaBuildRequest(BaseModel):
     direction: str = "both"
     audio_mode: str = "gemini"
     voice: str = "Sulafat"
+    enabled_tools: Optional[str] = "[]"
     save: bool = True
 
 
@@ -581,6 +582,7 @@ async def api_build_persona(req: PersonaBuildRequest):
         name=built["name"], agent_name=built["agent_name"], direction=built["direction"],
         voice=built["voice"], model=built["model"], audio_mode=built["audio_mode"],
         system_prompt=built["system_prompt"], source=built["source"], source_ref=built["source_ref"],
+        enabled_tools=req.enabled_tools or "[]",
         prompt_vars=built.get("prompt_vars") or {},
     )
     return persona
