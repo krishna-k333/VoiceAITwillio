@@ -80,15 +80,19 @@ class AppointmentTools(llm.ToolContext):
             self.create_google_calendar_event, self.http_request,
             self.lookup_contact, self.remember_details, self.book_calcom, self.cancel_calcom,
         ]
+        name_map = {m.__name__: m for m in all_methods}
         if not enabled:
             return all_methods
-        name_map = {m.__name__: m for m in all_methods}
-        selected = [name_map[n] for n in enabled if n in name_map]
-        # Always ensure core call lifecycle tools are available so call can end cleanly
-        for core in (self.hangup, self.end_call):
-            if core not in selected:
-                selected.append(core)
-        return selected
+
+        # Requested tools + core tools (strictly deduplicated by string name)
+        needed_names = []
+        for n in enabled:
+            if n in name_map and n not in needed_names:
+                needed_names.append(n)
+        for core in ("hangup", "end_call"):
+            if core not in needed_names and core in name_map:
+                needed_names.append(core)
+        return [name_map[n] for n in needed_names]
 
     @llm.function_tool
     async def check_availability(self, date: str, time: str) -> str:
