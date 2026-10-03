@@ -54,6 +54,7 @@ class AppointmentTools(llm.ToolContext):
         self._sip_domain = os.getenv("VOBIZ_SIP_DOMAIN", "")
         self.recording_url: Optional[str] = None
         self._call_logged = False  # set True when end_call() fires so agent.py won't double-log
+        self._hangup_requested = False
         self._booking_completed = False
         self._last_booking_summary = ""
         self.http_tools: list = []  # user-configured HTTP request tools
@@ -163,6 +164,38 @@ class AppointmentTools(llm.ToolContext):
             logger.warning("Google booking failed (non-fatal): %s", exc)
             return ""
 
+    async def _terminate_sip_call(self) -> None:
+        """Remove the caller's SIP participant after the farewell has played."""
+        if self._hangup_requested:
+            return
+        self._hangup_requested = True
+
+        async def _disconnect() -> None:
+            await asyncio.sleep(1.5)
+            participant_identity = f"sip_{self.phone_number}" if self.phone_number else ""
+            if not participant_identity:
+                participant_identity = next(
+                    (participant.identity for participant in self.ctx.room.remote_participants.values()
+                     if participant.identity.startswith("sip_")),
+                    "",
+                )
+            try:
+                if participant_identity:
+                    await self.ctx.api.room.remove_participant(
+                        api.RoomParticipantIdentity(
+                            room=self.ctx.room.name,
+                            identity=participant_identity,
+                        )
+                    )
+            except Exception as exc:
+                logger.warning("Could not remove SIP participant during hangup: %s", exc)
+            try:
+                await self.ctx.room.disconnect()
+            except Exception:
+                pass
+
+        asyncio.create_task(_disconnect())
+
     @llm.function_tool
     async def end_call(self, outcome: str, reason: str = "") -> str:
         """
@@ -181,16 +214,7 @@ class AppointmentTools(llm.ToolContext):
             self._call_logged = True  # only mark logged after confirmed DB insert
         except Exception as exc:
             logger.error("Failed to log call in end_call(): %s — fallback will retry", exc)
-        try:
-            async def _delayed_disc(room):
-                await asyncio.sleep(3.0)
-                try:
-                    await room.disconnect()
-                except Exception:
-                    pass
-            asyncio.create_task(_delayed_disc(self.ctx.room))
-        except Exception:
-            pass
+        await self._terminate_sip_call()
         return "Call ended. Say a brief, warm goodbye to the caller now."
 
     @llm.function_tool
@@ -219,16 +243,7 @@ class AppointmentTools(llm.ToolContext):
             self._call_logged = True
         except Exception as exc:
             logger.error("Failed to log call in hangup(): %s — fallback will retry", exc)
-        try:
-            async def _delayed_disc(room):
-                await asyncio.sleep(3.0)
-                try:
-                    await room.disconnect()
-                except Exception:
-                    pass
-            asyncio.create_task(_delayed_disc(self.ctx.room))
-        except Exception:
-            pass
+        await self._terminate_sip_call()
         return "Call ending. Say a brief, warm goodbye to the caller now."
 
     @llm.function_tool

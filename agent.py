@@ -7,7 +7,9 @@ import ssl
 import sys
 import time
 import certifi
+from datetime import datetime
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 # Force UTF-8 stdout/stderr so emoji in print() don't crash on Windows cp1252 consoles
 for _stream in (sys.stdout, sys.stderr):
@@ -742,6 +744,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         "site_visit_day_2": _from_job("site_visit_day_2", site_visit_day_2),
     })
 
+    india_now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    variables.update({
+        "current_date": india_now.strftime("%Y-%m-%d"),
+        "current_time": india_now.strftime("%I:%M %p IST"),
+        "current_datetime_india": india_now.strftime("%A, %d %B %Y, %I:%M %p IST"),
+        "timezone": "Asia/Kolkata (UTC+05:30)",
+    })
+
     # ── Render the prompt: dynamic {{template}} or legacy {build_prompt} ─────
     if custom_prompt and "{{" in custom_prompt:
         system_prompt = render_prompt(custom_prompt, variables)
@@ -806,6 +816,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         await _log("info", "Outbound prompt configured with dynamic first-second greeting")
 
     system_prompt += (
+        "\n\nLIVE DATE AND TIME:\n"
+        f"The current local time is {variables['current_datetime_india']} in Asia/Kolkata (UTC+05:30). "
+        "Use this as the source of truth for today, tomorrow, weekdays, and appointment dates. "
+        "Never book or suggest a date that has already passed.\n"
+        "Email capability: you can send confirmation emails when the caller provides an email address. "
+        "Do not say that you lack email access; if delivery ever fails, say the confirmation was recorded and offer SMS instead.\n"
         "\n\nCRITICAL RULES ON TOOL CALLS AND RESPONSES:\n"
         "1. NEVER STAY SILENT AFTER A TOOL RUNS! When any tool completes and returns its result, you MUST IMMEDIATELY speak back to the caller in 1-2 friendly, natural sentences without waiting for them to say anything.\n"
         "2. Communicate the tool result directly to the caller (e.g. confirm the slot is available, confirm the booking is done, confirm the SMS/email is sent).\n"
