@@ -965,6 +965,9 @@ tbody tr:hover td { background: var(--gray-50); }
       <button class="nav-btn" data-stab="prompt">
         <span class="nb-icon"><i data-lucide="pen-line"></i></span><span>AI Prompt</span>
       </button>
+      <button class="nav-btn" data-stab="personas">
+        <span class="nb-icon"><i data-lucide="user-round"></i></span><span>Personas</span>
+      </button>
     </div>
 
     <div class="nav-section">
@@ -1104,6 +1107,9 @@ tbody tr:hover td { background: var(--gray-50); }
             <form id="call-form" onsubmit="submitCall(event)">
               <div class="form-group"><label>Phone Number (E.164)</label><input type="text" id="f-phone" placeholder="+919876543210" required /></div>
               <div class="form-group"><label>Lead Name</label><input type="text" id="f-name" placeholder="Full name" /></div>
+              <div class="form-group"><label>Caller persona</label>
+                <select id="f-persona"><option value="">— Active outbound persona —</option></select>
+              </div>
 
               <!-- Collapse toggle -->
               <button type="button" id="f-details-toggle" onclick="toggleCallDetails()" style="background:none;border:1px solid var(--border);border-radius:6px;padding:6px 12px;cursor:pointer;font-size:13px;color:var(--text-muted);display:flex;align-items:center;gap:6px;margin-bottom:12px">
@@ -1289,7 +1295,6 @@ tbody tr:hover td { background: var(--gray-50); }
             <div class="form-group"><label>Model</label>
               <select id="agent-model">
                 <option value="gemini-3.8-live" selected>Gemini 3.8 Live (Ultra-low Latency) ⭐</option>
-                <option value="gemini-3.1-flash-live-preview">Gemini 3.1 Flash (Live)</option>
                 <option value="gemini-2.5-flash-native-audio-preview-12-2025">Gemini 2.5 Flash (Native Audio)</option>
               </select>
             </div>
@@ -1320,7 +1325,7 @@ tbody tr:hover td { background: var(--gray-50); }
       <div id="tab-prompt" class="tab-panel">
         <div class="page-header">
           <div class="page-title">AI Prompt</div>
-          <div class="page-sub">Global system prompt used for all calls unless overridden by an agent profile.</div>
+          <div class="page-sub">Used when no caller persona is selected for that direction. A persona prompt replaces this for its calls. Saved on this machine, no Supabase needed.</div>
         </div>
         <div style="max-width:780px">
           <div class="card">
@@ -1456,7 +1461,7 @@ tbody tr:hover td { background: var(--gray-50); }
           <div class="agent-form-grid">
             <div class="form-group"><label>Model</label>
               <select id="s-GEMINI_MODEL">
-                <option value="gemini-3.1-flash-live-preview">Gemini 3.1 Flash Live (Recommended)</option>
+                <option value="gemini-3.8-live" selected>Gemini 3.8 Live (Recommended)</option>
                 <option value="gemini-2.5-flash-native-audio-preview-12-2025">Gemini 2.5 Flash Native Audio</option>
               </select>
             </div>
@@ -1677,13 +1682,76 @@ tbody tr:hover td { background: var(--gray-50); }
       <!-- ═══ PERSONAS TAB ═══ -->
       <div id="tab-personas" class="tab-panel">
         <div class="page-header">
-          <div class="page-title">Inbound Personas</div>
-          <div class="page-sub">Choose which AI personality answers your inbound calls. Restart the inbound agent after switching.</div>
+          <div class="page-title">Caller personas</div>
+          <div class="page-sub">Write a prompt yourself, or build one from a website. Inbound and outbound can use different personas. Saved locally — Supabase is not required.</div>
         </div>
 
-        <div class="personas-grid" id="personas-grid">
-          <div style="color:var(--text-3)">Loading personas...</div>
+        <div class="card" style="margin-bottom:16px">
+          <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">
+            <div>Inbound: <strong id="persona-active-in">None</strong>
+              <button type="button" class="btn-muted btn-sm" onclick="clearPersonaSide('inbound')">Use built-in</button>
+            </div>
+            <div>Outbound: <strong id="persona-active-out">AI prompt</strong>
+              <button type="button" class="btn-muted btn-sm" onclick="clearPersonaSide('outbound')">Use AI prompt</button>
+            </div>
+            <span id="persona-apify-note" class="text-muted text-sm"></span>
+          </div>
         </div>
+
+        <div class="card" style="margin-bottom:16px;max-width:820px">
+          <h2 id="persona-form-title">New persona</h2>
+          <input type="hidden" id="persona-edit-id" />
+          <div class="agent-form-grid">
+            <div class="form-group"><label>Name</label><input id="persona-name" placeholder="Raj Dental" /></div>
+            <div class="form-group"><label>Agent name</label><input id="persona-agent-name" placeholder="Priya" /></div>
+          </div>
+          <div class="agent-form-grid">
+            <div class="form-group"><label>Direction label</label>
+              <select id="persona-direction">
+                <option value="both">Either side</option>
+                <option value="inbound">Meant for inbound</option>
+                <option value="outbound">Meant for outbound</option>
+              </select>
+              <div class="text-muted text-sm">A label only. Use inbound and Use outbound can put any saved persona on either side, and the two sides can differ.</div>
+            </div>
+            <div class="form-group"><label>Voice</label>
+              <select id="persona-voice">
+                <option value="Sulafat">Sulafat</option>
+                <option value="Aoede">Aoede</option>
+                <option value="Kore">Kore</option>
+                <option value="Zephyr">Zephyr</option>
+                <option value="Leda">Leda</option>
+                <option value="Puck">Puck</option>
+                <option value="Charon">Charon</option>
+                <option value="Fenrir">Fenrir</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group"><label>How the call hears and speaks</label>
+            <select id="persona-audio">
+              <option value="gemini">Gemini for the whole call (hears and speaks)</option>
+              <option value="deepgram">Deepgram listens, Gemini thinks and speaks</option>
+            </select>
+          </div>
+          <div class="form-group"><label>Full prompt</label>
+            <textarea id="persona-prompt" rows="12" placeholder="Write the whole system prompt here."></textarea>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button type="button" class="btn-primary" onclick="savePersonaForm()">Save persona</button>
+            <button type="button" class="btn-muted" id="persona-cancel" style="display:none" onclick="resetPersonaForm()">Cancel edit</button>
+          </div>
+
+          <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">
+            <h2>Build from a website</h2>
+            <p class="text-muted text-sm">Paste a website first. If it has no site, paste a Google Maps link or the business name. This uses APIFY_TOKEN from .env and can take about a minute.</p>
+            <div class="form-group"><label>Website, Maps link, or business name</label>
+              <input id="persona-target" placeholder="https://example.com" />
+            </div>
+            <button type="button" class="btn-primary" id="persona-build-btn" onclick="buildPersonaFromWeb()">Build and save</button>
+          </div>
+        </div>
+
+        <div id="personas-grid"><div style="color:var(--text-3)">Loading personas...</div></div>
       </div>
 
       <!-- ═══ INBOUND SETUP TAB ═══ -->
@@ -1813,7 +1881,7 @@ const tabTitles = {
   campaigns:'Campaigns', agents:'Agent Profiles', prompt:'AI Prompt',
   appointments:'Appointments', calls:'Call Logs', crm:'CRM',
   billing:'Billing', settings:'Settings', logs:'Logs',
-  'inbound-overview':'Inbound Overview', personas:'Inbound Personas',
+  'inbound-overview':'Inbound Overview', personas:'Personas',
   'inbound-setup':'Inbound Setup',
 };
 
@@ -1870,6 +1938,7 @@ function switchTab(name) {
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `tab-${name}`));
   if (name === 'stats') { loadStats(); loadLiveConfig(); }
+  else if (name === 'single') loadPersonas();
   else if (name === 'calls') loadCalls();
   else if (name === 'appointments') loadAppointments();
   else if (name === 'crm') loadCRM();
@@ -1977,6 +2046,7 @@ async function submitCall(e) {
     business_name: $('f-biz').value.trim() || 'our company',
     service_type: $('f-service').value.trim() || 'site visit',
     agent_profile_id: $('f-agent-profile').value || null,
+    persona_id: $('f-persona') ? ($('f-persona').value || null) : null,
     sip_provider: $('f-sip-provider').value,
   };
   // Real estate fields — only include if filled
@@ -2202,7 +2272,7 @@ window.editAgentProfile = async (id) => {
     $('agent-form-title').textContent = 'Edit Agent Profile';
     $('agent-name').value = p.name || '';
     $('agent-voice').value = p.voice || 'Aoede';
-    $('agent-model').value = p.model || 'gemini-3.1-flash-live-preview';
+    $('agent-model').value = p.model || 'gemini-3.8-live';
     $('agent-prompt').value = p.system_prompt || '';
     try { $('agent-tools').value = JSON.parse(p.enabled_tools||'[]').join(', '); } catch(e) { $('agent-tools').value = ''; }
     $('agent-is-default').checked = !!p.is_default;
@@ -2226,7 +2296,7 @@ window.resetAgentForm = () => {
   $('agent-form-title').textContent = 'Create Agent Profile';
   $('agent-name').value = '';
   $('agent-voice').value = 'Aoede';
-  $('agent-model').value = 'gemini-3.1-flash-live-preview';
+  $('agent-model').value = 'gemini-3.8-live';
   $('agent-prompt').value = '';
   $('agent-tools').value = '';
   $('agent-is-default').checked = false;
@@ -2554,75 +2624,201 @@ document.querySelectorAll('.mode-btn').forEach(b => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// INBOUND PERSONAS
+// CALLER PERSONAS (local database)
 // ═══════════════════════════════════════════════════════════════════
-const PERSONA_ICONS = {
-  raj_dental: '🦷', edu_agent: '👩‍💻', customer_support: '🛠️',
-  edu_outbound_demo: '🎓', holi_wishes: '🎨', real_estate: '🏡',
-};
+let _personaState = { personas: [], active_inbound_id: '', active_outbound_id: '' };
+
+function _esc(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 
 async function loadPersonas() {
   try {
-    const res = await api('/api/inbound/personas');
-    renderPersonas(res.data || []);
-    renderInboundOverview(res.data || []);
-  } catch(e) {
+    const res = await api('/api/personas');
+    _personaState = res;
+    renderPersonas(res);
+    loadPersonaChoices();
+  } catch (e) {
     const g = $('personas-grid');
-    if (g) g.innerHTML = '<div style="color:var(--text-3)">Failed to load personas — is the server running?</div>';
+    if (g) g.innerHTML = '<div style="color:var(--text-3)">Could not reach the app, so nothing was loaded. Restart it, then reload this page.</div>';
   }
 }
 
-function renderPersonas(personas) {
+function loadPersonaChoices() {
+  const sel = $('f-persona');
+  if (!sel || !_personaState.personas) return;
+  const current = sel.value;
+  const active = _personaState.active_outbound_id;
+  sel.innerHTML = '<option value="">— Active outbound persona —</option>' +
+    _personaState.personas.map(p =>
+      `<option value="${_esc(p.id)}">${_esc(p.name)} · ${p.audio_mode === 'deepgram' ? 'Deepgram' : 'Gemini'}${p.id === active ? ' (outbound now)' : ''}</option>`
+    ).join('');
+  if (current) sel.value = current;
+}
+
+function renderPersonas(res) {
+  const byId = Object.fromEntries((res.personas || []).map(p => [p.id, p]));
+  const inn = byId[res.active_inbound_id];
+  const out = byId[res.active_outbound_id];
+  if ($('persona-active-in')) $('persona-active-in').textContent = inn ? inn.name : 'Built-in';
+  if ($('persona-active-out')) $('persona-active-out').textContent = out ? out.name : 'AI prompt';
+  const note = $('persona-apify-note');
+  if (note) note.textContent = res.apify_configured ? 'Apify key found.' : 'Add APIFY_TOKEN to .env to build from a website.';
+  const el = $('inbound-active-persona');
+  if (el) {
+    el.innerHTML = inn
+      ? `<div style="font-weight:700">${_esc(inn.name)}</div><div class="text-muted text-sm">${_esc(inn.agent_name)} · ${_esc(inn.voice)} · ${inn.audio_mode === 'deepgram' ? 'Deepgram + Gemini' : 'Gemini Live'}</div>`
+      : '<div class="text-muted text-sm">No inbound persona saved yet. Pick one under Personas.</div>';
+  }
   const grid = $('personas-grid');
   if (!grid) return;
-  if (!personas.length) { grid.innerHTML = '<div>No personas found.</div>'; return; }
-
-  grid.innerHTML = personas.map(p => `
-    <div class="persona-card ${p.is_active ? 'is-active' : ''}">
-      ${p.is_active ? '<div class="persona-active-badge">Active</div>' : ''}
-      <div class="persona-avatar" style="background:${p.color}22;color:${p.color}">
-        ${PERSONA_ICONS[p.id] || '🤖'}
+  if (!res.personas.length) {
+    grid.innerHTML = '<div class="text-muted">No personas yet. Write one above, or build it from a website.</div>';
+    return;
+  }
+  grid.innerHTML = res.personas.map(p => {
+    const mode = p.audio_mode === 'deepgram' ? 'Deepgram + Gemini' : 'Gemini Live';
+    const badges = [
+      p.id === res.active_inbound_id ? 'Inbound' : '',
+      p.id === res.active_outbound_id ? 'Outbound' : '',
+    ].filter(Boolean).join(' · ');
+    return `<div class="card" style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div>
+          <strong>${_esc(p.name)}</strong>
+          <div class="text-muted text-sm">${_esc(p.agent_name)} · ${_esc(p.voice)} · ${_esc(p.direction)} · ${mode}${badges ? ' · ' + badges : ''}</div>
+          <div class="text-muted text-sm">${p.source === 'manual' ? 'Written by hand' : (p.source === 'website' ? 'From website' : 'From Google Maps')}${p.source_ref ? ' · ' + _esc(p.source_ref) : ''}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button type="button" class="btn-muted btn-sm" onclick="usePersona('${p.id}','inbound')">Use inbound</button>
+          <button type="button" class="btn-muted btn-sm" onclick="usePersona('${p.id}','outbound')">Use outbound</button>
+          <button type="button" class="btn-muted btn-sm" onclick="editPersona('${p.id}')">Edit</button>
+          <button type="button" class="btn-muted btn-sm" onclick="deletePersona('${p.id}')">Delete</button>
+        </div>
       </div>
-      <div class="persona-card-name">${p.name}</div>
-      <div class="persona-card-sub">Agent: <strong>${p.agent_name}</strong> &nbsp;·&nbsp; Voice: ${p.voice}</div>
-      <div class="persona-tags">
-        <span class="persona-tag">${p.language}</span>
-        <span class="persona-tag">${p.use_case}</span>
-      </div>
-      <div class="persona-desc">${p.description}</div>
-      <button class="btn ${p.is_active ? 'btn-muted' : 'btn-primary'} btn-sm"
-        onclick="activatePersona('${p.id}')" ${p.is_active ? 'disabled' : ''}>
-        ${p.is_active ? '✓ Active' : 'Activate'}
-      </button>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
 }
 
-function renderInboundOverview(personas) {
-  const active = personas.find(p => p.is_active);
-  const el = $('inbound-active-persona');
-  if (!el || !active) return;
-  const icon = PERSONA_ICONS[active.id] || '🤖';
-  el.innerHTML = `
-    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-      <div style="width:56px;height:56px;border-radius:16px;background:${active.color}22;display:flex;align-items:center;justify-content:center;font-size:1.8rem;flex-shrink:0">${icon}</div>
-      <div>
-        <div style="font-family:var(--font-head);font-size:1.05rem;font-weight:700">${active.name}</div>
-        <div style="color:var(--text-2);font-size:0.82rem;margin-top:2px">${active.agent_name} &nbsp;·&nbsp; Voice: ${active.voice} &nbsp;·&nbsp; ${active.language}</div>
-        <span class="badge badge-ok" style="margin-top:6px;display:inline-block">${active.use_case}</span>
-      </div>
-    </div>
-    <p style="color:var(--text-2);font-size:0.82rem;margin-top:14px;line-height:1.6">${active.description}</p>
-  `;
+function resetPersonaForm() {
+  $('persona-edit-id').value = '';
+  $('persona-form-title').textContent = 'New persona';
+  $('persona-name').value = '';
+  $('persona-agent-name').value = '';
+  $('persona-direction').value = 'both';
+  $('persona-voice').value = 'Sulafat';
+  $('persona-audio').value = 'gemini';
+  $('persona-prompt').value = '';
+  $('persona-cancel').style.display = 'none';
 }
 
-async function activatePersona(personaId) {
+function editPersona(id) {
+  const p = (_personaState.personas || []).find(x => x.id === id);
+  if (!p) return;
+  $('persona-edit-id').value = p.id;
+  $('persona-form-title').textContent = 'Edit persona';
+  $('persona-name').value = p.name || '';
+  $('persona-agent-name').value = p.agent_name || '';
+  $('persona-direction').value = p.direction || 'both';
+  $('persona-voice').value = p.voice || 'Sulafat';
+  $('persona-audio').value = p.audio_mode || 'gemini';
+  $('persona-prompt').value = p.system_prompt || '';
+  $('persona-cancel').style.display = '';
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+async function savePersonaForm() {
+  const id = $('persona-edit-id').value;
+  const body = {
+    name: $('persona-name').value.trim(),
+    agent_name: $('persona-agent-name').value.trim(),
+    direction: $('persona-direction').value,
+    voice: $('persona-voice').value,
+    model: 'gemini-3.8-live',
+    audio_mode: $('persona-audio').value,
+    system_prompt: $('persona-prompt').value,
+    source: (id && ((_personaState.personas || []).find(p => p.id === id) || {}).source) || 'manual',
+    source_ref: (id && ((_personaState.personas || []).find(p => p.id === id) || {}).source_ref) || '',
+  };
+  if (!body.name) { toast('Give the persona a name', 'err'); return; }
   try {
-    await apiPost(`/api/inbound/personas/${personaId}/activate`, {});
-    toast('Persona activated — restart the inbound agent to apply changes');
+    const r = await fetch(id ? `/api/personas/${id}` : '/api/personas', {
+      method: id ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || 'Save failed');
+    }
+    toast('Persona saved');
+    resetPersonaForm();
+    loadPersonas();
+  } catch (e) {
+    toast(e.message === 'Failed to fetch' ? 'The app is not answering. Restart it, then save again.' : (e.message || 'Save failed'), 'err');
+  }
+}
+
+async function usePersona(id, side) {
+  try {
+    const r = await apiPost(`/api/personas/${id}/use`, { side });
+    if (!r.ok) throw new Error('switch failed');
+    toast(side === 'inbound' ? 'Inbound persona switched' : 'Outbound persona switched');
     loadPersonas();
     loadInboundStatus();
-  } catch(e) { toast('Failed to activate persona', 'err'); }
+  } catch (e) { toast('Could not switch persona', 'err'); }
+}
+
+async function clearPersonaSide(side) {
+  try {
+    const r = await fetch(`/api/personas/active/${side}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error('clear failed');
+    toast(side === 'inbound' ? 'Inbound uses the built-in persona' : 'Outbound uses the AI prompt');
+    loadPersonas();
+    loadInboundStatus();
+  } catch (e) { toast('Could not clear persona', 'err'); }
+}
+
+async function deletePersona(id) {
+  if (!confirm('Delete this persona?')) return;
+  try {
+    const r = await fetch(`/api/personas/${id}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error('delete failed');
+    toast('Persona deleted');
+    loadPersonas();
+  } catch (e) { toast('Could not delete persona', 'err'); }
+}
+
+async function buildPersonaFromWeb() {
+  const target = $('persona-target').value.trim();
+  if (!target) { toast('Paste a website, Maps link, or business name', 'err'); return; }
+  const btn = $('persona-build-btn');
+  btn.disabled = true;
+  btn.textContent = 'Building… this can take a minute';
+  try {
+    const r = await fetch('/api/personas/build', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target,
+        direction: $('persona-direction').value,
+        audio_mode: $('persona-audio').value,
+        voice: $('persona-voice').value,
+        save: true,
+      }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.detail || 'Build failed');
+    toast(data.source === 'website' ? 'Built from the website' : 'Built from Google Maps');
+    $('persona-target').value = '';
+    await loadPersonas();
+    editPersona(data.id);
+  } catch (e) {
+    toast(e.message === 'Failed to fetch' ? 'The app is not answering. Restart it, then build again.' : (e.message || 'Build failed'), 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Build and save';
+  }
 }
 
 async function loadInboundStatus() {
@@ -2751,6 +2947,7 @@ async function loadBilling() {
 function init() {
   lucide.createIcons();
   loadStats();
+  loadPersonas();
   loadLiveConfig();
   loadCalls();
   loadAppointments();

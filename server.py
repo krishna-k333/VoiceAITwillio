@@ -44,6 +44,22 @@ from db import (
     save_settings, set_setting, update_call_notes, update_campaign_run_stats, update_campaign_status,
 )
 from prompts import DEFAULT_SYSTEM_PROMPT
+from local_store import (
+    active_persona_id, call_fields, delete_persona, get_active_persona, get_local_setting,
+    get_persona, list_personas, save_persona, set_active_persona, set_local_setting,
+)
+from persona_builder import apify_token, build_from_target
+from agent_service import (
+    AgentError,
+    create_from_ai,
+    create_from_prompt,
+    create_from_website,
+    edit_selected_prompt,
+    get_agent,
+    list_agents,
+    place_outbound_call,
+    select_agent,
+)
 
 load_dotenv(".env", override=True)
 ADMIN_EMAIL    = os.getenv("ADMIN_EMAIL", "").strip()
@@ -125,6 +141,14 @@ document.getElementById('f').addEventListener('submit',async ev=>{
 </body></html>"""
 
 
+def _agent_api_key_ok(request: Request) -> bool:
+    expected = os.getenv("AGENT_API_KEY", "").strip()
+    given = request.headers.get("x-api-key", "").strip()
+    if not expected or not given or len(given) != len(expected):
+        return False
+    return secrets.compare_digest(given, expected)
+
+
 def _check_session(token: str) -> bool:
     if not token:
         return False
@@ -145,6 +169,8 @@ class _AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
         if not path.startswith("/api/") or path in self._PUBLIC:
+            return await call_next(request)
+        if path.startswith("/api/agents") and _agent_api_key_ok(request):
             return await call_next(request)
         token = request.cookies.get("dashboard_session", "")
         if not _check_session(token):
@@ -192,6 +218,7 @@ class CallRequest(BaseModel):
     service_type: str = "site visit"
     system_prompt: Optional[str] = None
     agent_profile_id: Optional[str] = None
+    persona_id: Optional[str] = None
     sip_provider: Optional[str] = None
     # Real estate / project fields
     agent_name: Optional[str] = None
@@ -306,73 +333,30 @@ async def healthz():
 
 @app.post("/api/call")
 async def api_dispatch_call(req: CallRequest):
-    url    = await eff("LIVEKIT_URL")
-    key    = await eff("LIVEKIT_API_KEY")
-    secret = await eff("LIVEKIT_API_SECRET")
-
-    if not all([url, key, secret]):
-        raise HTTPException(400, "LiveKit credentials not configured. Go to Settings → LiveKit.")
-
-    phone = req.phone.strip()
-    if not phone.startswith("+"):
-        raise HTTPException(400, "Phone must be in E.164 format: +919876543210")
-
-    effective_prompt = req.system_prompt
-    effective_voice = None
-    effective_model = None
-    effective_tools = None
-
-    if req.agent_profile_id:
-        profile = await get_agent_profile(req.agent_profile_id)
-        if profile:
-            if not effective_prompt and profile.get("system_prompt"):
-                effective_prompt = profile["system_prompt"]
-            effective_voice = profile.get("voice")
-            effective_model = profile.get("model")
-            effective_tools = profile.get("enabled_tools")
-
-    if not effective_prompt:
-        effective_prompt = await get_setting("system_prompt", "") or None
-
-    room_name = f"call-{phone.replace('+', '')}-{random.randint(1000, 9999)}"
-    metadata: dict = {
-        "phone_number": phone,
-        "lead_name": req.lead_name,
-        "business_name": req.business_name,
-        "service_type": req.service_type,
-        "system_prompt": effective_prompt,
-        "sip_provider": req.sip_provider or os.getenv("SIP_PROVIDER") or await get_setting("SIP_PROVIDER", "twilio"),
-    }
-    for _field in ("agent_name", "project_name", "project_type", "project_location",
-                   "project_status", "key_benefit_1", "key_benefit_2", "key_benefit_3",
-                   "site_visit_day_1", "site_visit_day_2"):
-        _val = getattr(req, _field, None)
-        if _val:
-            metadata[_field] = _val
-    if effective_voice:  metadata["voice_override"] = effective_voice
-    if effective_model:  metadata["model_override"] = effective_model
-    if effective_tools:  metadata["tools_override"] = effective_tools
-
     try:
-        from livekit import api as lk_api
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ctx))
-        lk = lk_api.LiveKitAPI(url=url, api_key=key, api_secret=secret, session=session)
-        await lk.room.create_room(lk_api.CreateRoomRequest(name=room_name, empty_timeout=300, max_participants=5))
-        await lk.agent_dispatch.create_dispatch(
-            lk_api.CreateAgentDispatchRequest(
-                agent_name="outbound-caller", room=room_name, metadata=json.dumps(metadata)
-            )
+        return await place_outbound_call(
+            phone=req.phone,
+            lead_name=req.lead_name,
+            business_name=req.business_name,
+            service_type=req.service_type,
+            system_prompt=req.system_prompt,
+            agent_id=req.persona_id,
+            agent_profile_id=req.agent_profile_id,
+            sip_provider=req.sip_provider,
+            agent_name=req.agent_name,
+            project_name=req.project_name,
+            project_type=req.project_type,
+            project_location=req.project_location,
+            project_status=req.project_status,
+            key_benefit_1=req.key_benefit_1,
+            key_benefit_2=req.key_benefit_2,
+            key_benefit_3=req.key_benefit_3,
+            site_visit_day_1=req.site_visit_day_1,
+            site_visit_day_2=req.site_visit_day_2,
         )
-        await lk.aclose()
-        await session.close()
-        await log_error("server", f"Call dispatched to {phone}", f"room={room_name}", "info")
-        return {"status": "dispatched", "room": room_name, "phone": phone}
-    except Exception as exc:
+    except AgentError as exc:
         logger.error("Dispatch error: %s", exc)
-        raise HTTPException(500, f"Dispatch failed: {exc}")
+        raise HTTPException(exc.status, str(exc))
 
 
 # ── Calls ─────────────────────────────────────────────────────────────────────
@@ -423,20 +407,263 @@ async def api_cancel_appointment(appointment_id: str):
 
 @app.get("/api/prompt")
 async def api_get_prompt():
-    saved = await get_setting("system_prompt", "")
+    saved = get_local_setting("system_prompt", "")
+    if not saved:
+        saved = await get_setting("system_prompt", "")
     return {"prompt": saved or DEFAULT_SYSTEM_PROMPT, "is_custom": bool(saved)}
 
 
 @app.post("/api/prompt")
 async def api_save_prompt(req: PromptRequest):
-    await set_setting("system_prompt", req.prompt)
+    set_local_setting("system_prompt", req.prompt)
+    try:
+        await set_setting("system_prompt", req.prompt)
+    except Exception:
+        pass
     return {"status": "saved"}
 
 
 @app.delete("/api/prompt")
 async def api_reset_prompt():
-    await set_setting("system_prompt", "")
+    set_local_setting("system_prompt", "")
+    try:
+        await set_setting("system_prompt", "")
+    except Exception:
+        pass
     return {"status": "reset", "prompt": DEFAULT_SYSTEM_PROMPT}
+
+
+class PersonaRequest(BaseModel):
+    name: str
+    agent_name: str = ""
+    direction: str = "both"
+    voice: str = "Sulafat"
+    model: str = "gemini-3.8-live"
+    audio_mode: str = "gemini"
+    system_prompt: str = ""
+    enabled_tools: str = "[]"
+    source: str = "manual"
+    source_ref: str = ""
+
+
+class PersonaUseRequest(BaseModel):
+    side: str
+
+
+class PersonaBuildRequest(BaseModel):
+    target: str
+    direction: str = "both"
+    audio_mode: str = "gemini"
+    voice: str = "Sulafat"
+    save: bool = True
+
+
+def _persona_payload() -> dict:
+    return {
+        "personas": list_personas(),
+        "active_inbound_id": active_persona_id("inbound"),
+        "active_outbound_id": active_persona_id("outbound"),
+        "apify_configured": bool(apify_token()),
+    }
+
+
+@app.get("/api/personas")
+async def api_list_personas():
+    return _persona_payload()
+
+
+@app.post("/api/personas")
+async def api_create_persona(req: PersonaRequest):
+    if not req.name.strip():
+        raise HTTPException(400, "Name is required")
+    if req.audio_mode not in ("gemini", "deepgram"):
+        raise HTTPException(400, "audio_mode must be gemini or deepgram")
+    persona = save_persona(
+        name=req.name, agent_name=req.agent_name, direction=req.direction,
+        voice=req.voice, model=req.model, audio_mode=req.audio_mode,
+        system_prompt=req.system_prompt, enabled_tools=req.enabled_tools,
+        source=req.source, source_ref=req.source_ref,
+    )
+    return persona
+
+
+@app.put("/api/personas/{persona_id}")
+async def api_update_persona(persona_id: str, req: PersonaRequest):
+    if req.audio_mode not in ("gemini", "deepgram"):
+        raise HTTPException(400, "audio_mode must be gemini or deepgram")
+    try:
+        return save_persona(
+            persona_id=persona_id, name=req.name, agent_name=req.agent_name,
+            direction=req.direction, voice=req.voice, model=req.model,
+            audio_mode=req.audio_mode, system_prompt=req.system_prompt,
+            enabled_tools=req.enabled_tools, source=req.source, source_ref=req.source_ref,
+        )
+    except KeyError:
+        raise HTTPException(404, "Persona not found")
+
+
+@app.delete("/api/personas/{persona_id}")
+async def api_delete_persona(persona_id: str):
+    if not delete_persona(persona_id):
+        raise HTTPException(404, "Persona not found")
+    return {"status": "deleted"}
+
+
+@app.post("/api/personas/{persona_id}/use")
+async def api_use_persona(persona_id: str, req: PersonaUseRequest):
+    if req.side not in ("inbound", "outbound"):
+        raise HTTPException(400, "side must be inbound or outbound")
+    try:
+        set_active_persona(req.side, persona_id)
+    except KeyError:
+        raise HTTPException(404, "Persona not found")
+    return {"status": "active", "side": req.side, "persona_id": persona_id}
+
+
+@app.delete("/api/personas/active/{side}")
+async def api_clear_active_persona(side: str):
+    if side not in ("inbound", "outbound"):
+        raise HTTPException(400, "side must be inbound or outbound")
+    set_active_persona(side, None)
+    return {"status": "cleared", "side": side}
+
+
+@app.post("/api/personas/build")
+async def api_build_persona(req: PersonaBuildRequest):
+    if req.audio_mode not in ("gemini", "deepgram"):
+        raise HTTPException(400, "audio_mode must be gemini or deepgram")
+    try:
+        built = await build_from_target(req.target, req.direction)
+    except Exception as exc:
+        raise HTTPException(400, str(exc))
+    built["audio_mode"] = req.audio_mode
+    if req.voice:
+        built["voice"] = req.voice
+    if not req.save:
+        return built
+    persona = save_persona(
+        name=built["name"], agent_name=built["agent_name"], direction=built["direction"],
+        voice=built["voice"], model=built["model"], audio_mode=built["audio_mode"],
+        system_prompt=built["system_prompt"], source=built["source"], source_ref=built["source_ref"],
+    )
+    return persona
+
+
+class AgentPromptCreate(BaseModel):
+    name: str
+    system_prompt: str
+    agent_name: str = ""
+    direction: str = "both"
+    voice: str = "Sulafat"
+    audio_mode: str = "gemini"
+    enabled_tools: Optional[list] = None
+
+
+class AgentAiCreate(BaseModel):
+    brief: str
+    name: str = ""
+    direction: str = "both"
+    voice: str = "Sulafat"
+    audio_mode: str = "gemini"
+
+
+class AgentWebsiteCreate(BaseModel):
+    url: str
+    direction: str = "both"
+    voice: str = "Sulafat"
+    audio_mode: str = "gemini"
+
+
+class AgentSelectRequest(BaseModel):
+    side: str
+    agent_id: Optional[str] = None
+
+
+class AgentPromptEdit(BaseModel):
+    side: str
+    system_prompt: str
+
+
+class AgentCallRequest(BaseModel):
+    phone: str
+    lead_name: str = "there"
+    business_name: str = "our company"
+    service_type: str = "site visit"
+    agent_id: Optional[str] = None
+
+
+def _agent_http(exc: AgentError) -> HTTPException:
+    return HTTPException(exc.status, str(exc))
+
+
+@app.post("/api/agents/from-website")
+async def api_agent_from_website(req: AgentWebsiteCreate):
+    try:
+        return await create_from_website(req.url, req.direction, req.audio_mode, req.voice)
+    except AgentError as exc:
+        raise _agent_http(exc)
+
+
+@app.post("/api/agents/from-prompt")
+async def api_agent_from_prompt(req: AgentPromptCreate):
+    try:
+        return create_from_prompt(
+            req.name, req.system_prompt, req.agent_name, req.direction,
+            req.voice, req.audio_mode, req.enabled_tools,
+        )
+    except AgentError as exc:
+        raise _agent_http(exc)
+
+
+@app.post("/api/agents/from-ai")
+async def api_agent_from_ai(req: AgentAiCreate):
+    try:
+        return await create_from_ai(req.brief, req.name, req.direction, req.audio_mode, req.voice)
+    except AgentError as exc:
+        raise _agent_http(exc)
+
+
+@app.get("/api/agents")
+async def api_agent_list():
+    return list_agents()
+
+
+@app.post("/api/agents/select")
+async def api_agent_select(req: AgentSelectRequest):
+    try:
+        return select_agent(req.side, req.agent_id)
+    except AgentError as exc:
+        raise _agent_http(exc)
+
+
+@app.post("/api/agents/call")
+async def api_agent_call(req: AgentCallRequest):
+    try:
+        return await place_outbound_call(
+            phone=req.phone,
+            lead_name=req.lead_name,
+            business_name=req.business_name,
+            service_type=req.service_type,
+            agent_id=req.agent_id,
+        )
+    except AgentError as exc:
+        raise _agent_http(exc)
+
+
+@app.post("/api/agents/selected/prompt")
+async def api_agent_edit_selected_prompt(req: AgentPromptEdit):
+    try:
+        return edit_selected_prompt(req.side, req.system_prompt)
+    except AgentError as exc:
+        raise _agent_http(exc)
+
+
+@app.get("/api/agents/{agent_id}")
+async def api_agent_detail(agent_id: str):
+    try:
+        return get_agent(agent_id)
+    except AgentError as exc:
+        raise _agent_http(exc)
 
 
 # ── Settings ──────────────────────────────────────────────────────────────────
@@ -862,12 +1089,23 @@ async def api_activate_inbound_persona(persona_id: str):
 
 @app.get("/api/inbound/status")
 async def api_get_inbound_status():
-    active_id = await get_setting("INBOUND_ACTIVE_PERSONA", "raj_dental")
     trunk_id = await get_setting("INBOUND_TRUNK_ID", "")
     did = (await get_setting("VOBIZ_INBOUND_NUMBER", "")) or (await get_setting("VOICELINK_INBOUND_NUMBER", ""))
-    persona = INBOUND_PERSONAS.get(active_id, INBOUND_PERSONAS["raj_dental"])
+    local = get_active_persona("inbound")
+    if local:
+        persona = {
+            "id": local["id"],
+            "name": local["name"],
+            "agent_name": local.get("agent_name") or local["name"],
+            "voice": local.get("voice") or "",
+            "audio_mode": local.get("audio_mode") or "gemini",
+            "is_active": True,
+        }
+    else:
+        active_id = await get_setting("INBOUND_ACTIVE_PERSONA", "raj_dental")
+        persona = {**INBOUND_PERSONAS.get(active_id, INBOUND_PERSONAS["raj_dental"]), "is_active": True}
     return {
-        "active_persona": {**persona, "is_active": True},
+        "active_persona": persona,
         "trunk_id": trunk_id,
         "did_number": did,
         "is_configured": bool(trunk_id),
@@ -880,7 +1118,15 @@ async def _dispatch_one(lk, lk_api, contact: dict, room_name: str,
                          prompt: Optional[str], profile: Optional[dict] = None,
                          sip_provider: str = "twilio") -> bool:
     try:
-        saved_prompt = prompt or (await get_setting("system_prompt", "")) or None
+        persona = get_active_persona("outbound")
+        fields = call_fields(persona)
+        saved_prompt = (
+            prompt
+            or fields.get("system_prompt")
+            or get_local_setting("system_prompt", "")
+            or (await get_setting("system_prompt", ""))
+            or None
+        )
         metadata: dict = {
             "phone_number": contact["phone"],
             "lead_name": contact.get("lead_name", "there"),
@@ -889,12 +1135,29 @@ async def _dispatch_one(lk, lk_api, contact: dict, room_name: str,
             "system_prompt": saved_prompt,
             "sip_provider": sip_provider,
         }
-        if profile:
-            if not metadata["system_prompt"] and profile.get("system_prompt"):
+        if fields.get("voice_override"):
+            metadata["voice_override"] = fields["voice_override"]
+        if fields.get("model_override"):
+            metadata["model_override"] = fields["model_override"]
+        if fields.get("tools_override"):
+            metadata["tools_override"] = fields["tools_override"]
+        if fields.get("audio_mode"):
+            metadata["audio_mode"] = fields["audio_mode"]
+        if fields.get("persona_id"):
+            metadata["persona_id"] = fields["persona_id"]
+        if fields.get("agent_name"):
+            metadata["agent_name"] = fields["agent_name"]
+        # An active outbound persona wins over an old agent profile.
+        # A prompt typed on the campaign itself still replaces the persona's words.
+        if profile and not persona:
+            if profile.get("system_prompt") and not prompt:
                 metadata["system_prompt"] = profile["system_prompt"]
-            if profile.get("voice"):   metadata["voice_override"] = profile["voice"]
-            if profile.get("model"):   metadata["model_override"] = profile["model"]
-            if profile.get("enabled_tools"): metadata["tools_override"] = profile["enabled_tools"]
+            if profile.get("voice"):
+                metadata["voice_override"] = profile["voice"]
+            if profile.get("model"):
+                metadata["model_override"] = profile["model"]
+            if profile.get("enabled_tools"):
+                metadata["tools_override"] = profile["enabled_tools"]
         await lk.agent_dispatch.create_dispatch(
             lk_api.CreateAgentDispatchRequest(agent_name="outbound-caller", room=room_name, metadata=json.dumps(metadata))
         )

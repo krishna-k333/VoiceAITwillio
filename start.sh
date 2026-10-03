@@ -11,7 +11,7 @@ fi
 
 echo "[outboundai] Starting..."
 echo "[outboundai] LiveKit: ${LIVEKIT_URL}"
-echo "[outboundai] Model:   ${GEMINI_MODEL:-gemini-3.1-flash-live-preview}"
+echo "[outboundai] Model:   ${GEMINI_MODEL:-gemini-3.8-live}"
 echo "[outboundai] SIP:     ${SIP_PROVIDER:-twilio}"
 
 echo "[outboundai] Starting FastAPI server on port 8000..."

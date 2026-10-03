@@ -109,7 +109,14 @@ except ImportError:
 
 # ── Session factory ──────────────────────────────────────────────────────────
 
-def _build_session(tools: list, system_prompt: str) -> AgentSession:
+def _build_session(
+    tools: list,
+    system_prompt: str,
+    *,
+    model: Optional[str] = None,
+    voice: Optional[str] = None,
+    audio_mode: Optional[str] = None,
+) -> AgentSession:
     """
     Build AgentSession with Gemini Live or pipeline fallback.
 
@@ -120,9 +127,14 @@ def _build_session(tools: list, system_prompt: str) -> AgentSession:
 
     ⚠️ EndSensitivity MUST use full string form: END_SENSITIVITY_LOW (not .LOW — AttributeError!)
     """
-    gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.8-live")
-    gemini_voice = os.getenv("GEMINI_TTS_VOICE", "Aoede")
-    use_realtime = os.getenv("USE_GEMINI_REALTIME", "true").lower() != "false"
+    gemini_model = model or os.getenv("GEMINI_MODEL", "gemini-3.8-live")
+    gemini_voice = voice or os.getenv("GEMINI_TTS_VOICE", "Aoede")
+    if audio_mode == "deepgram":
+        use_realtime = False
+    elif audio_mode == "gemini":
+        use_realtime = True
+    else:
+        use_realtime = os.getenv("USE_GEMINI_REALTIME", "true").lower() != "false"
 
     RealtimeClass = _google_realtime or (_google_beta_realtime if use_realtime else None)
 
@@ -160,10 +172,34 @@ def _build_session(tools: list, system_prompt: str) -> AgentSession:
     if _google_llm is None:
         raise RuntimeError("No Google AI backend. Run: pip install 'livekit-plugins-google>=1.0'")
 
-    logger.info("SESSION MODE: pipeline (Deepgram STT + Gemini LLM + Google TTS)")
-    stt = _deepgram_stt(model="nova-3", language="multi") if _deepgram_stt else None
-    tts = _google_tts() if _google_tts else None
-    return AgentSession(stt=stt, llm=_google_llm(model="gemini-2.0-flash"), tts=tts, vad=silero.VAD.load(), tools=tools)
+    logger.info("SESSION MODE: pipeline (Deepgram STT + Gemini LLM + Gemini TTS, voice=%s)", gemini_voice)
+    if _deepgram_stt is None:
+        raise RuntimeError("Deepgram plugin is not installed. Run: pip install livekit-plugins-deepgram")
+    if not os.getenv("DEEPGRAM_API_KEY"):
+        raise RuntimeError("DEEPGRAM_API_KEY is not set. Deepgram mode needs it in .env")
+    # 400ms of silence before a turn ends. The plugin default of 25ms cuts people off on a phone line.
+    stt = _deepgram_stt(
+        model="nova-3",
+        language="multi",
+        endpointing_ms=400,
+        interim_results=True,
+        punctuate=True,
+        smart_format=True,
+        api_key=os.getenv("DEEPGRAM_API_KEY"),
+    )
+    try:
+        from livekit.plugins.google.beta.gemini_tts import TTS as GeminiTTS
+        tts = GeminiTTS(model="gemini-2.5-flash-preview-tts", voice_name=gemini_voice or "Sulafat")
+    except Exception as exc:
+        raise RuntimeError(f"Gemini TTS could not start for Deepgram mode: {exc}") from exc
+    # gemini-3.8-live is a speech model. The pipeline needs a text model.
+    return AgentSession(
+        stt=stt,
+        llm=_google_llm(model="gemini-2.5-flash"),
+        tts=tts,
+        vad=silero.VAD.load(),
+        tools=tools,
+    )
 
 
 class OutboundAssistant(Agent):
@@ -173,7 +209,7 @@ class OutboundAssistant(Agent):
 
 # ── Background S3 Recording Helper ──────────────────────────────────────────
 async def _start_s3_recording(ctx: agents.JobContext, tool_ctx: AppointmentTools) -> None:
-    """Start S3 recording in the background without blocking greeting or session start."""
+    """Start S3 recording in the background without blocking the opening line or session start."""
     aws_key = os.getenv("S3_ACCESS_KEY_ID") or os.getenv("AWS_ACCESS_KEY_ID", "")
     aws_secret = os.getenv("S3_SECRET_ACCESS_KEY") or os.getenv("AWS_SECRET_ACCESS_KEY", "")
     aws_bucket = os.getenv("S3_BUCKET") or os.getenv("AWS_BUCKET_NAME", "")
@@ -243,6 +279,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     voice_override: Optional[str] = None
     model_override: Optional[str] = None
     tools_override: Optional[str] = None
+    audio_mode: Optional[str] = None
+    persona_id: Optional[str] = None
     sip_provider = "twilio"
     is_inbound = False
 
@@ -267,6 +305,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             voice_override  = data.get("voice_override")
             model_override  = data.get("model_override")
             tools_override  = data.get("tools_override")
+            audio_mode      = data.get("audio_mode") or audio_mode
+            persona_id      = data.get("persona_id") or persona_id
             sip_provider    = os.getenv("SIP_PROVIDER") or data.get("sip_provider", sip_provider)
             is_inbound      = data.get("inbound", False)
         except (json.JSONDecodeError, AttributeError):
@@ -279,8 +319,52 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     await _log("info", f"Call job received — phone={phone_number} lead={lead_name} biz={business_name} inbound={is_inbound}")
 
-    # ── For inbound: load active persona from settings ────────────────────────
+    # ── Persona: local database, then the old built-in inbound list ───────────
     _inbound_persona_data = None
+
+    def _apply_saved_persona(saved: dict) -> None:
+        nonlocal custom_prompt, voice_override, model_override, tools_override, audio_mode, agent_name_var, business_name, _inbound_persona_data
+        if saved.get("system_prompt") and not custom_prompt:
+            custom_prompt = saved["system_prompt"]
+        if not voice_override and saved.get("voice"):
+            voice_override = saved["voice"]
+        if not model_override and saved.get("model"):
+            model_override = saved["model"]
+        if not tools_override and saved.get("enabled_tools"):
+            tools_override = saved["enabled_tools"]
+        if not audio_mode and saved.get("audio_mode"):
+            audio_mode = saved["audio_mode"]
+        if saved.get("agent_name"):
+            agent_name_var = saved["agent_name"]
+        if business_name in ("our company", "", None):
+            business_name = saved.get("name") or business_name
+        _inbound_persona_data = {
+            "name": saved.get("name"),
+            "agent_name": saved.get("agent_name"),
+            "voice": saved.get("voice"),
+            "prompt": saved.get("system_prompt"),
+        }
+
+    try:
+        from local_store import get_active_persona, get_local_setting, get_persona
+        saved_persona = get_persona(persona_id) if persona_id else None
+        if saved_persona is None:
+            saved_persona = get_active_persona("inbound" if is_inbound else "outbound")
+        if saved_persona:
+            _apply_saved_persona(saved_persona)
+            await _log(
+                "info",
+                f"Persona loaded: {saved_persona.get('name')} "
+                f"({'inbound' if is_inbound else 'outbound'}, audio={audio_mode or 'default'})",
+            )
+        elif not custom_prompt and not is_inbound:
+            local_prompt = get_local_setting("system_prompt", "")
+            if local_prompt:
+                custom_prompt = local_prompt
+                await _log("info", "Using saved AI prompt — no outbound persona selected")
+    except Exception as _pe:
+        await _log("warning", f"Could not load saved persona: {_pe}")
+
     if is_inbound and not custom_prompt:
         try:
             from personas import PERSONAS
@@ -290,14 +374,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 custom_prompt = _inbound_persona_data["prompt"]
             if not voice_override and _inbound_persona_data.get("voice"):
                 voice_override = _inbound_persona_data["voice"]
-                os.environ["GEMINI_TTS_VOICE"] = voice_override
             if business_name in ("our company", ""):
                 business_name = _inbound_persona_data.get("name", business_name)
             if _inbound_persona_data.get("agent_name"):
                 agent_name_var = _inbound_persona_data["agent_name"]
-            await _log("info", f"Inbound persona loaded: {_persona_id} ({_inbound_persona_data.get('name', '')}), voice={voice_override}")
+            await _log("info", f"Built-in inbound persona loaded: {_persona_id}")
         except Exception as _pe:
-            await _log("warning", f"Could not load inbound persona: {_pe}")
+            await _log("warning", f"Could not load built-in inbound persona: {_pe}")
 
     system_prompt = build_prompt(
         lead_name=lead_name, lead_phone=phone_number or "",
@@ -311,11 +394,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     )
     tool_ctx = AppointmentTools(ctx, phone_number, lead_name, is_inbound=is_inbound, persona_data=_inbound_persona_data)
 
-    if voice_override:
-        os.environ["GEMINI_TTS_VOICE"] = voice_override
-    if model_override:
-        os.environ["GEMINI_MODEL"] = model_override
-
     if tools_override:
         try:
             enabled_tools = json.loads(tools_override)
@@ -323,6 +401,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             enabled_tools = await get_enabled_tools()
     else:
         enabled_tools = await get_enabled_tools()
+
+    if audio_mode == "deepgram":
+        if _deepgram_stt is None or not os.getenv("DEEPGRAM_API_KEY"):
+            await _log("error", "This persona uses Deepgram, but DEEPGRAM_API_KEY is missing or the plugin is not installed")
+            ctx.shutdown()
+            return
+        if not os.getenv("GOOGLE_API_KEY"):
+            await _log("error", "Deepgram mode still needs GOOGLE_API_KEY so Gemini can think and speak")
+            ctx.shutdown()
+            return
 
     # ── Connect ──────────────────────────────────────────────────────────────
     await ctx.connect()
@@ -400,14 +488,23 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     elif is_inbound:
         tool_ctx._call_start_time = time.time()
 
-    gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.8-live")
+    gemini_model = model_override or os.getenv("GEMINI_MODEL", "gemini-3.8-live")
     opening_voice = voice_override or os.getenv("GEMINI_TTS_VOICE", "Aoede")
 
-    # ── Build and start Gemini Live ──────────────────────────────────────────
-    await _log("info", f"Building AI session — model={gemini_model}")
+    # ── Build and start the session ──────────────────────────────────────────
+    if audio_mode == "deepgram":
+        await _log("info", f"Building AI session — mode=deepgram+gemini model=gemini-2.5-flash voice={opening_voice}")
+    else:
+        await _log("info", f"Building AI session — mode={audio_mode or 'gemini-live'} model={gemini_model} voice={opening_voice}")
     active_tools = tool_ctx.build_tool_list(enabled_tools)
     await _log("info", f"Tools loaded: {[t.__name__ for t in active_tools]}")
-    session = _build_session(tools=active_tools, system_prompt=system_prompt)
+    session = _build_session(
+        tools=active_tools,
+        system_prompt=system_prompt,
+        model=model_override,
+        voice=voice_override,
+        audio_mode=audio_mode,
+    )
 
     # Use RoomOptions if available (non-deprecated), else fall back
     # NEVER use close_on_disconnect=True with SIP — drops on any audio blip
@@ -426,7 +523,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         )
 
     await session.start(**_session_kwargs)
-    await _log("info", "Agent session started — AI ready, generating greeting")
+    await _log("info", "Agent session started — AI ready, speaking the opening line")
 
     # ── Fallback logger — runs if model never calls end_call() ───────────────
     _sip_identity = f"sip_{phone_number}" if phone_number else None
@@ -525,27 +622,21 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             await _log("info", "SIP participant already gone before listener setup — flagging disconnect")
             _disconnect_event.set()
 
-    # ── Optional S3 recording (runs in background so greeting is instant) ────
+    # ── Optional S3 recording (runs in background so the opening line is not blocked) ────
     if phone_number:
         asyncio.create_task(_start_s3_recording(ctx, tool_ctx))
 
-    # ── Greeting — AI greets natively in ~1 second (zero recorded audio) ─────
-    if is_inbound:
-        greeting = (
-            f"The call just connected. In one short, warm natural sentence, greet the caller as {agent_name_var} from {business_name} "
-            f"and ask how you can help them today."
-        )
-    elif phone_number:
-        greeting = (
-            f"The call just connected with {lead_name}. In one short natural sentence, say: "
-            f"'Hi! Am I speaking with {lead_name}? This is {agent_name_var} from {business_name}.'"
-        )
-    else:
-        greeting = f"The call just connected. Greet the caller warmly in one short sentence as {agent_name_var} from {business_name}."
-
+    # No separate greeting. Gemini Live will not speak until a reply is requested,
+    # so this turn is the first real line — not "Hi, this is …".
+    opening = (
+        "The call just connected. Do not greet: no hi, hello, good morning, "
+        "and do not ask if you are speaking with them. "
+        "Say the first real line of your instructions now, in one short sentence. "
+        "Do not wait for the caller, and do not call any tool before this sentence."
+    )
     try:
-        await session.generate_reply(instructions=greeting)
-        await _log("info", "Greeting triggered natively via Gemini Live generate_reply — agent speaking first")
+        await session.generate_reply(instructions=opening)
+        await _log("info", "Opening line triggered via generate_reply — no greeting")
     except Exception as _gr_exc:
         await _log("warning", f"generate_reply failed: {_gr_exc}")
 

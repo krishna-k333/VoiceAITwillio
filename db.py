@@ -61,6 +61,8 @@ async def _adb():
 
 
 def init_db() -> None:
+    from local_store import init_local_db
+    init_local_db()
     url = os.getenv("SUPABASE_URL", SUPABASE_URL)
     key = os.getenv("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
     if not url or not key:
@@ -721,7 +723,7 @@ async def get_agent_profile(profile_id: str) -> Optional[dict]:
 
 
 async def create_agent_profile(
-    name: str, voice: str = "Aoede", model: str = "gemini-3.1-flash-live-preview",
+    name: str, voice: str = "Aoede", model: str = "gemini-3.8-live",
     system_prompt: Optional[str] = None, enabled_tools: str = "[]", is_default: bool = False,
 ) -> str:
     profile_id = str(uuid.uuid4())
