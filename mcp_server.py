@@ -47,6 +47,9 @@ mcp = FastMCP(
         ],
     ),
 )
+mcp.settings.transport_security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=False,
+)
 
 from agent_service import (  # noqa: E402
     AgentError,
