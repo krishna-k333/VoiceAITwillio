@@ -23,7 +23,7 @@ for _stream in (sys.stdout, sys.stderr):
             pass
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -654,11 +654,17 @@ async def vobiz_answer_webhook(request: Request):
     logger.info(f"Vobiz answer webhook: query={dict(request.query_params)} body={body.decode('utf-8', errors='ignore')}")
     xml_content = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Dial action="https://voicees.moorerevenue.com/webhook/vobiz/dial-status" timeout="30">
-        <Number>sip:moorerevenue@test-zej844je.sip.livekit.cloud:5060</Number>
-    </Dial>
+    <Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-l16;rate=16000">
+        wss://voicees.moorerevenue.com/ws/vobiz
+    </Stream>
 </Response>"""
     return Response(content=xml_content, media_type="application/xml")
+
+
+@app.websocket("/ws/vobiz")
+async def websocket_vobiz_endpoint(websocket: WebSocket):
+    from vobiz_bridge import handle_vobiz_websocket
+    await handle_vobiz_websocket(websocket)
 
 
 @app.api_route("/api/vobiz/dial-status", methods=["GET", "POST"])
