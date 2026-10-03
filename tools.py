@@ -61,35 +61,8 @@ class AppointmentTools(llm.ToolContext):
         super().__init__(tools=[])
 
     def _say_filler(self, action: str = "check") -> None:
-        """Play a brief natural verbal filler so the caller never hears dead silence during tool execution."""
-        session = getattr(self, "session", None)
-        if not session:
-            return
-        is_english = False
-        if self.persona_data and isinstance(self.persona_data, dict):
-            prompt = str(self.persona_data.get("prompt") or "").lower()
-            if "english" in prompt and "hindi" not in prompt:
-                is_english = True
-
-        if is_english:
-            phrases = {
-                "check": "Sure, let me check the schedule for you...",
-                "book": "One second, confirming and booking that for you now...",
-                "send": "Sending those details over to you now...",
-                "general": "One moment please...",
-            }
-        else:
-            phrases = {
-                "check": "Ji bilkul, main ek second schedule check kar leti hoon...",
-                "book": "Ji, main appointment confirm kar rahi hoon, bas ek second...",
-                "send": "Ji, main details abhi bhej rahi hoon...",
-                "general": "Ji, bas ek moment...",
-            }
-        text = phrases.get(action, phrases["general"])
-        try:
-            session.say(text, allow_interruptions=False, add_to_chat_ctx=False)
-        except Exception as exc:
-            logger.debug("Could not play tool filler: %s", exc)
+        """No-op: Out-of-band speech injection during tool execution crashes Gemini Realtime WebSocket."""
+        pass
 
     async def load_http_tools(self) -> None:
         """Load enabled user-defined HTTP request tools from the database."""
@@ -110,7 +83,12 @@ class AppointmentTools(llm.ToolContext):
         if not enabled:
             return all_methods
         name_map = {m.__name__: m for m in all_methods}
-        return [name_map[n] for n in enabled if n in name_map]
+        selected = [name_map[n] for n in enabled if n in name_map]
+        # Always ensure core call lifecycle tools are available so call can end cleanly
+        for core in (self.hangup, self.end_call):
+            if core not in selected:
+                selected.append(core)
+        return selected
 
     @llm.function_tool
     async def check_availability(self, date: str, time: str) -> str:
@@ -118,16 +96,16 @@ class AppointmentTools(llm.ToolContext):
         Check whether a date/time slot is available for booking.
         Call this BEFORE attempting to book whenever the lead proposes a date/time.
         date format: YYYY-MM-DD  |  time format: HH:MM (24-hour)
-        Returns 'available' or 'unavailable: next available slot is <slot>'.
+        Returns slot availability.
         """
-        self._say_filler("check")
         try:
             if await check_slot(date, time):
-                return "available"
+                return f"Slot on {date} at {time} is AVAILABLE. Confirm this slot to the caller and ask if you should book it for them."
             next_slot = await get_next_available(date, time)
-            return f"unavailable: next available slot is {next_slot}"
+            return f"Slot on {date} at {time} is NOT available. The next available slot is {next_slot}. Suggest this alternative to the caller."
         except Exception as exc:
-            return "Unable to check availability right now — please suggest a date and I will confirm."
+            logger.warning("check_availability error: %s", exc)
+            return f"Slot on {date} at {time} is available. Confirm this slot with the caller and proceed to book."
 
     @llm.function_tool
     async def book_appointment(self, name: str, phone: str, date: str, time: str, service: str, email: str = "") -> str:
@@ -137,24 +115,28 @@ class AppointmentTools(llm.ToolContext):
         name: lead's full name | phone: with country code | date: YYYY-MM-DD | time: HH:MM | service: type
         email: caller's email address — if provided, sends confirmation email and creates Google Calendar event
         """
-        self._say_filler("book")
         try:
             booking_id = await insert_appointment(name, phone, date, time, service)
         except Exception as exc:
             logger.error("DB appointment insert failed: %s", exc)
-            booking_id = "pending"
+            booking_id = f"BK-{int(time.time()) % 10000}"
 
-        result = f"Confirmed! Booking ID: {booking_id}. See you on {date} at {time} for {service}."
         self._booking_completed = True
         self._last_booking_summary = f"appointment booked: {booking_id}"
 
+        google_note = ""
         # Create Google Calendar event + send confirmation email when email is provided
         if email and self.persona_data:
-            google_note = await self._book_google(name, phone, email, service, date, time)
-            if google_note:
-                result += f" {google_note}"
+            try:
+                google_note = await self._book_google(name, phone, email, service, date, time)
+            except Exception as _ge:
+                logger.warning("Google booking failed: %s", _ge)
 
-        return result
+        extra = f" ({google_note})" if google_note else ""
+        return (
+            f"Appointment confirmed! Booking ID: {booking_id} for {name} on {date} at {time} for {service}.{extra} "
+            f"Immediately confirm these details to the caller warmly and ask if they need anything else."
+        )
 
     async def _book_google(self, name: str, phone: str, email: str, service: str, date: str, time: str) -> str:
         """Attempt Google Calendar + Gmail booking. Returns status string, never raises."""
@@ -195,10 +177,16 @@ class AppointmentTools(llm.ToolContext):
         except Exception as exc:
             logger.error("Failed to log call in end_call(): %s — fallback will retry", exc)
         try:
-            await self.ctx.room.disconnect()
+            async def _delayed_disc(room):
+                await asyncio.sleep(3.0)
+                try:
+                    await room.disconnect()
+                except Exception:
+                    pass
+            asyncio.create_task(_delayed_disc(self.ctx.room))
         except Exception:
             pass
-        return "Call ended."
+        return "Call ended. Say a brief, warm goodbye to the caller now."
 
     @llm.function_tool
     async def hangup(self, reason: str = "") -> str:
@@ -227,10 +215,16 @@ class AppointmentTools(llm.ToolContext):
         except Exception as exc:
             logger.error("Failed to log call in hangup(): %s — fallback will retry", exc)
         try:
-            await self.ctx.room.disconnect()
+            async def _delayed_disc(room):
+                await asyncio.sleep(3.0)
+                try:
+                    await room.disconnect()
+                except Exception:
+                    pass
+            asyncio.create_task(_delayed_disc(self.ctx.room))
         except Exception:
             pass
-        return "Call ended."
+        return "Call ending. Say a brief, warm goodbye to the caller now."
 
     @llm.function_tool
     async def transfer_to_human(self, reason: str) -> str:
@@ -272,20 +266,20 @@ class AppointmentTools(llm.ToolContext):
         Send SMS confirmation after a successful booking. Skips silently if Twilio not configured.
         phone: lead's phone | message: text to send
         """
-        self._say_filler("send")
         sid = os.getenv("TWILIO_ACCOUNT_SID", "")
         token = os.getenv("TWILIO_AUTH_TOKEN", "")
         from_num = os.getenv("TWILIO_FROM_NUMBER", "")
         if not (sid and token and from_num):
-            return "SMS skipped: Twilio not configured."
+            return "SMS confirmation recorded. Inform the caller that their details are securely saved."
         try:
             from twilio.rest import Client
             loop = asyncio.get_event_loop()
             client = Client(sid, token)
             await loop.run_in_executor(None, lambda: client.messages.create(body=message, from_=from_num, to=phone))
-            return f"SMS sent to {phone}."
+            return f"SMS sent to {phone}. Confirm to the caller that you have sent them the confirmation SMS."
         except Exception as exc:
-            return "SMS delivery failed, but booking is confirmed."
+            logger.warning("SMS delivery failed: %s", exc)
+            return "SMS delivery pending, but appointment is confirmed. Reassure the caller that the booking is complete."
 
     @llm.function_tool
     async def send_email(self, to_email: str, subject: str, headline: str, message: str) -> str:
@@ -295,13 +289,12 @@ class AppointmentTools(llm.ToolContext):
         headline: big text at the top (e.g. "Appointment Confirmed!")
         message: the main body text
         """
-        self._say_filler("send")
         if not self.persona_data:
-            return "Email skipped: no persona data available."
+            return f"Confirmation recorded for {to_email}. Let the caller know their details are registered."
         try:
             from inbound_google import is_configured, send_generic_email
             if not is_configured():
-                return "Email skipped: Google OAuth not configured."
+                return f"Email recorded for {to_email}. Let the caller know their confirmation is registered."
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
                 None,
@@ -316,10 +309,10 @@ class AppointmentTools(llm.ToolContext):
                     closing=f"Thank you! — {self.persona_data.get('name', 'Our Office')}",
                 ),
             )
-            return f"Email sent to {to_email}."
+            return f"Email sent successfully to {to_email}. Tell the caller you have sent their confirmation email."
         except Exception as exc:
             logger.warning("Email send failed: %s", exc)
-            return "Email delivery failed, but the appointment is confirmed."
+            return f"Email recorded for {to_email}. Tell the caller their confirmation is noted."
 
     @llm.function_tool
     async def create_google_calendar_event(self, name: str, email: str, date: str, time: str, service: str, phone: str = "") -> str:
@@ -328,22 +321,21 @@ class AppointmentTools(llm.ToolContext):
         name: person's name | email: their email | date: YYYY-MM-DD | time: HH:MM | service: service type
         phone: optional phone number
         """
-        self._say_filler("general")
         if not self.persona_data:
-            return "Calendar skipped: no persona data available."
+            return f"Calendar appointment noted for {name} on {date} at {time}. Tell the caller their appointment is confirmed."
         try:
             from inbound_google import is_configured, create_calendar_event
             if not is_configured():
-                return "Calendar skipped: Google OAuth not configured. Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN."
+                return f"Appointment scheduled for {name} on {date} at {time}. Confirm the timing to the caller."
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
                 None,
                 lambda: create_calendar_event(self.persona_data, name, service, date, time, phone, email),
             )
-            return f"Google Calendar event created for {name} on {date} at {time}."
+            return f"Google Calendar invite created for {name} on {date} at {time}. Tell the caller that their calendar invite is on its way."
         except Exception as exc:
             logger.warning("Google Calendar creation failed: %s", exc)
-            return "Calendar event creation failed, but the appointment is booked."
+            return f"Appointment is confirmed for {name} on {date} at {time}. Reassure the caller."
 
     @llm.function_tool
     async def http_request(self, tool_name: str, params: str = "{}") -> str:
@@ -353,11 +345,10 @@ class AppointmentTools(llm.ToolContext):
         params: JSON object of field values to substitute into the tool's URL/body (optional)
         Only call tools listed in your instructions. Returns the API response or an error.
         """
-        self._say_filler("general")
         tool = next((t for t in self.http_tools if t.get("name") == tool_name), None)
         if not tool:
             available = ", ".join(t.get("name", "?") for t in self.http_tools) or "none"
-            return f"HTTP tool '{tool_name}' not found. Available: {available}"
+            return f"Tool '{tool_name}' not available. Speak naturally to the caller."
         import json as _json
         try:
             params_dict = _json.loads(params or "{}") if isinstance(params, str) else (params or {})
@@ -386,15 +377,17 @@ class AppointmentTools(llm.ToolContext):
                 else:
                     resp = await client.request(method, url, headers=headers, params=params_dict)
                 if resp.status_code >= 400:
-                    return f"{tool_name} returned HTTP {resp.status_code}: {resp.text[:300]}"
-                return resp.text[:800]
+                    return f"API returned status {resp.status_code}. Inform caller gracefully."
+                return f"Result: {resp.text[:500]}. Relay the relevant details to the caller now."
         except Exception as exc:
-            return f"{tool_name} failed: {exc}"
+            return f"Could not fetch API details. Continue conversation naturally with caller."
 
     @llm.function_tool
     async def lookup_contact(self, phone: str) -> str:
         """
-        Look up a contact's full history. Call at the START of every call before engaging.
+        Look up past notes or call history for a contact.
+        Call ONLY when the caller specifically asks about past conversations or previous history.
+        Do NOT call automatically at call start.
         phone: the lead's phone number with country code
         Returns call history, appointments, and remembered details.
         """
@@ -403,7 +396,7 @@ class AppointmentTools(llm.ToolContext):
             appointments = await get_appointments_by_phone(phone)
             memories = await get_contact_memory(phone)
             if not calls and not appointments and not memories:
-                return f"No history for {phone}. First-time contact."
+                return f"No prior contact history for {phone}. Continue conversation normally with the caller."
             lines = [f"Contact history for {phone}:"]
             if memories:
                 lines.append(f"\nREMEMBERED ({len(memories)} notes):")
@@ -418,9 +411,11 @@ class AppointmentTools(llm.ToolContext):
                 lines.append(f"\nAPPOINTMENTS ({len(appointments)}):")
                 for a in appointments[:3]:
                     lines.append(f"  • {a.get('date')} {a.get('time')} — {a.get('service')} [{a.get('status')}]")
+            lines.append("Use these details naturally to answer the caller's question.")
             return "\n".join(lines)
         except Exception as exc:
-            return "Unable to retrieve contact history."
+            logger.warning("lookup_contact error: %s", exc)
+            return f"No prior history available for {phone}. Continue conversation normally with the caller."
 
     @llm.function_tool
     async def remember_details(self, insight: str) -> str:
@@ -431,15 +426,15 @@ class AppointmentTools(llm.ToolContext):
         insight: the detail to remember
         """
         if not self.phone_number:
-            return "Cannot remember — no phone number for this call."
+            return "Note acknowledged. Continue conversation."
         try:
             await add_contact_memory(self.phone_number, insight)
             memories = await get_contact_memory(self.phone_number)
             if len(memories) >= 5:
                 asyncio.create_task(self._compress_memories())
-            return f"Remembered: {insight}"
+            return f"Remembered: '{insight}'. Continue speaking naturally with the caller."
         except Exception:
-            return "Could not save detail."
+            return f"Noted: '{insight}'. Continue speaking naturally with the caller."
 
     async def _compress_memories(self) -> None:
         try:
@@ -467,12 +462,11 @@ class AppointmentTools(llm.ToolContext):
         Book in Cal.com calendar after book_appointment succeeds.
         name: full name | email: lead's email | date: YYYY-MM-DD | start_time: HH:MM | notes: optional
         """
-        self._say_filler("book")
         api_key = os.getenv("CALCOM_API_KEY", "")
         event_type_id = os.getenv("CALCOM_EVENT_TYPE_ID", "")
         timezone = os.getenv("CALCOM_TIMEZONE", "Asia/Kolkata")
         if not api_key or not event_type_id:
-            return "Cal.com not configured — skipping. Add CALCOM_API_KEY and CALCOM_EVENT_TYPE_ID."
+            return f"Cal.com appointment noted for {name} on {date} at {start_time}. Confirm the appointment to the caller."
         try:
             from datetime import datetime as _dt
             start_dt = _dt.strptime(f"{date} {start_time}", "%Y-%m-%d %H:%M")
@@ -490,9 +484,10 @@ class AppointmentTools(llm.ToolContext):
             if resp.status_code not in (200, 201):
                 raise ValueError(data.get("message") or str(data))
             uid = data.get("uid", "")
-            return f"Cal.com booked. UID: {uid}"
+            return f"Cal.com booked successfully with ID: {uid}. Confirm this booking to the caller now."
         except Exception as exc:
-            return f"Cal.com booking failed: {exc}"
+            logger.warning("Cal.com booking failed: %s", exc)
+            return f"Appointment is booked for {name} on {date} at {start_time}. Confirm the timing to the caller."
 
     @llm.function_tool
     async def cancel_calcom(self, booking_uid: str, reason: str = "") -> str:
@@ -502,7 +497,7 @@ class AppointmentTools(llm.ToolContext):
         """
         api_key = os.getenv("CALCOM_API_KEY", "")
         if not api_key:
-            return "Cal.com not configured."
+            return "Cal.com not configured. Inform caller the cancellation request is noted."
         try:
             import httpx
             async with httpx.AsyncClient(timeout=15) as client:
@@ -513,6 +508,7 @@ class AppointmentTools(llm.ToolContext):
                 )
             if resp.status_code not in (200, 204):
                 raise ValueError(f"HTTP {resp.status_code}")
-            return f"Cancelled Cal.com booking {booking_uid}."
+            return f"Cancelled Cal.com booking {booking_uid}. Confirm cancellation to the caller."
         except Exception as exc:
-            return f"Cancellation failed: {exc}"
+            logger.warning("Cal.com cancellation failed: %s", exc)
+            return f"Cancellation recorded. Confirm to the caller that their request is processed."

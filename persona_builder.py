@@ -348,8 +348,8 @@ Rules:
 - Indian or Hindi source: the quoted lines are natural Hinglish. Any other source: the quoted lines are in that language. Headings stay in English.
 - Section headings the agent does not read aloud: WHO YOU ARE, FIRST LINE, CALL FLOW, OBJECTIONS, BOOKING, STYLE, TOOLS, KNOWLEDGE.
 - KNOWLEDGE must copy the real services, area, hours, phone, prices, and common questions from the source, in enough detail that the agent can answer. Do not compress KNOWLEDGE into one sentence.
-- Tools, and only after the first sentence: lookup_contact, check_availability, book_appointment, send_sms_confirmation, send_email, create_google_calendar_event, remember_details, transfer_to_human, hangup, end_call.
-- lookup_contact must not run before the first sentence. hangup or end_call must run before every hangup. book_appointment only after a clear yes, and only after check_availability.
+- Tools: check_availability, book_appointment, send_sms_confirmation, send_email, create_google_calendar_event, remember_details, transfer_to_human, hangup, end_call, lookup_contact.
+- Never run tools before the first greeting. When any tool completes, immediately speak the result back to the caller in 1-2 friendly sentences. lookup_contact is only for when the caller explicitly asks about past calls.
 - Use hangup for natural call endings (goodbye, done talking, not interested). Use end_call only when a specific outcome must be logged (wrong_number, voicemail, no_answer).
 - send_email sends a branded confirmation email. create_google_calendar_event creates a calendar event. Both work after book_appointment when Google OAuth is configured.
 - The only tokens you may leave for the dialer to fill are {{lead_name}} and {{lead_phone}}. Write the business name in plain text.

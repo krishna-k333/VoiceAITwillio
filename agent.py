@@ -814,6 +814,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         )
         await _log("info", "Outbound prompt configured with dynamic first-second greeting")
 
+    system_prompt += (
+        "\n\nCRITICAL RULES ON TOOL CALLS AND RESPONSES:\n"
+        "1. NEVER STAY SILENT AFTER A TOOL RUNS! When any tool completes and returns its result, you MUST IMMEDIATELY speak back to the caller in 1-2 friendly, natural sentences without waiting for them to say anything.\n"
+        "2. Communicate the tool result directly to the caller (e.g. confirm the slot is available, confirm the booking is done, confirm the SMS/email is sent).\n"
+        "3. Never call lookup_contact at the start of the call. Always greet and talk first!"
+    )
+
     # ── Pre-load tools & build session BEFORE dialing so answering has zero latency ──
     active_tools = tool_ctx.build_tool_list(enabled_tools)
     await _log("info", f"Tools loaded: {[t.__name__ for t in active_tools]}")

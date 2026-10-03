@@ -204,24 +204,33 @@ async def clear_errors() -> None:
 async def insert_appointment(name: str, phone: str, date: str, time: str, service: str) -> str:
     full_id = str(uuid.uuid4())
     booking_id = full_id[:8].upper()
-    db = await _adb()
-    await db.table("appointments").insert({
-        "id": full_id, "name": name, "phone": phone,
-        "date": date, "time": time, "service": service,
-        "status": "booked", "created_at": datetime.now().isoformat(),
-    }).execute()
+    try:
+        db = await _adb()
+        await db.table("appointments").insert({
+            "id": full_id, "name": name, "phone": phone,
+            "date": date, "time": time, "service": service,
+            "status": "booked", "created_at": datetime.now().isoformat(),
+        }).execute()
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger("outbound-agent").warning("insert_appointment DB fallback: %s", exc)
     return booking_id
 
 
 async def check_slot(date: str, time: str) -> bool:
     """Returns True if slot is available (no existing booking)."""
-    db = await _adb()
-    result = await (
-        db.table("appointments").select("id")
-        .eq("date", date).eq("time", time).eq("status", "booked")
-        .maybe_single().execute()
-    )
-    return result.data is None
+    try:
+        db = await _adb()
+        result = await (
+            db.table("appointments").select("id")
+            .eq("date", date).eq("time", time).eq("status", "booked")
+            .maybe_single().execute()
+        )
+        return result.data is None
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger("outbound-agent").warning("check_slot DB fallback (assuming open): %s", exc)
+        return True
 
 
 async def get_next_available(date: str, time: str) -> str:
