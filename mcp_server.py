@@ -37,7 +37,7 @@ mcp = FastMCP(
     port=_PORT,
     stateless_http=True,
     transport_security=TransportSecuritySettings(
-        enable_dns_rebinding_protection=True,
+        enable_dns_rebinding_protection=False,
         allowed_hosts=_allowed_hosts(),
         allowed_origins=[
             f"https://{_PUBLIC_HOST}",
