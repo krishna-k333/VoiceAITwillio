@@ -57,32 +57,42 @@ async def handle_vobiz_websocket(websocket: WebSocket):
             )
             logger.info("Started streaming agent audio to Vobiz (16kHz mono 20ms)")
             frames_sent = 0
-            async for frame in audio_stream:
-                if not stream_id:
-                    # playAudio without streamId is dropped by Vobiz, so the caller hears silence.
-                    if not warned_missing_stream:
-                        warned_missing_stream = True
-                        logger.warning(
-                            "Agent audio arrived before a Vobiz streamId — "
-                            "frames are dropped until the start event includes streamId"
-                        )
-                    continue
-                payload = base64.b64encode(frame.data).decode("utf-8")
-                msg = {
-                    "event": "playAudio",
-                    "streamId": stream_id,
-                    "media": {
-                        "contentType": "audio/x-l16",
-                        "sampleRate": 16000,
-                        "payload": payload,
-                    },
-                }
-                await websocket.send_text(json.dumps(msg))
-                frames_sent += 1
-                if frames_sent == 1 or frames_sent % 100 == 0:
-                    logger.info(f"Sent {frames_sent} audio frames to Vobiz")
+            async for item in audio_stream:
+                try:
+                    if not stream_id:
+                        # playAudio without streamId is dropped by Vobiz, so the caller hears silence.
+                        if not warned_missing_stream:
+                            warned_missing_stream = True
+                            logger.warning(
+                                "Agent audio arrived before a Vobiz streamId — "
+                                "frames are dropped until the start event includes streamId"
+                            )
+                        continue
+                    # audio_stream yields AudioFrameEvent, whose .frame is AudioFrame
+                    frame = item.frame if hasattr(item, "frame") else item
+                    data_buf = frame.data if hasattr(frame, "data") else frame
+                    payload = base64.b64encode(bytes(data_buf)).decode("utf-8")
+                    msg = {
+                        "event": "playAudio",
+                        "streamId": stream_id,
+                        "media": {
+                            "contentType": "audio/x-l16",
+                            "sampleRate": 16000,
+                            "payload": payload,
+                        },
+                    }
+                    await websocket.send_text(json.dumps(msg))
+                    frames_sent += 1
+                    if frames_sent == 1 or frames_sent % 100 == 0:
+                        logger.info(f"Sent {frames_sent} audio frames to Vobiz (streamId={stream_id})")
+                except WebSocketDisconnect:
+                    logger.info("WebSocket disconnected while streaming agent audio")
+                    break
+                except Exception as frame_err:
+                    logger.warning(f"Error sending audio frame to Vobiz: {frame_err}")
+                    await asyncio.sleep(0.01)
         except Exception as exc:
-            logger.warning(f"Agent audio stream ended: {exc}")
+            logger.warning(f"Agent audio stream ended: {exc}", exc_info=True)
 
     try:
         while True:

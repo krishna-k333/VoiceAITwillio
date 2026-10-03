@@ -884,7 +884,7 @@ async def vobiz_answer_webhook(request: Request):
     logger.info(f"Vobiz answer webhook: query={dict(request.query_params)} body={body.decode('utf-8', errors='ignore')}")
     xml_content = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Stream bidirectional="true" keepCallAlive="true" audioTrack="inbound" contentType="audio/x-l16;rate=16000">wss://voicees.moorerevenue.com/ws/vobiz</Stream>
+    <Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-l16;rate=16000">wss://voicees.moorerevenue.com/ws/vobiz</Stream>
 </Response>"""
     return Response(content=xml_content, media_type="application/xml")
 
