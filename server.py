@@ -136,7 +136,11 @@ def _check_session(token: str) -> bool:
 
 
 class _AuthMiddleware(BaseHTTPMiddleware):
-    _PUBLIC = {"/api/login", "/api/logout", "/api/auth/check", "/api/vobiz/answer", "/api/vobiz/hangup", "/webhook/vobiz/answer", "/webhook/vobiz/hangup"}
+    _PUBLIC = {
+        "/api/login", "/api/logout", "/api/auth/check",
+        "/api/vobiz/answer", "/api/vobiz/hangup", "/api/vobiz/dial-status",
+        "/webhook/vobiz/answer", "/webhook/vobiz/hangup", "/webhook/vobiz/dial-status",
+    }
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -650,10 +654,19 @@ async def vobiz_answer_webhook(request: Request):
     logger.info(f"Vobiz answer webhook: query={dict(request.query_params)} body={body.decode('utf-8', errors='ignore')}")
     xml_content = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Speak voice="WOMAN" language="en-IN">Hello, thank you for calling Moore Revenue AI. We are connecting you now.</Speak>
-    <Wait length="2"/>
+    <Dial action="https://voicees.moorerevenue.com/webhook/vobiz/dial-status" timeout="30">
+        <User>sip:moorerevenue@test-zej844je.sip.livekit.cloud:5060</User>
+    </Dial>
 </Response>"""
     return Response(content=xml_content, media_type="application/xml")
+
+
+@app.api_route("/api/vobiz/dial-status", methods=["GET", "POST"])
+@app.api_route("/webhook/vobiz/dial-status", methods=["GET", "POST"])
+async def vobiz_dial_status_webhook(request: Request):
+    body = await request.body()
+    logger.info(f"Vobiz dial-status webhook: query={dict(request.query_params)} body={body.decode('utf-8', errors='ignore')}")
+    return Response(content="<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response/>", media_type="application/xml")
 
 
 @app.api_route("/api/vobiz/hangup", methods=["GET", "POST"])
