@@ -154,9 +154,85 @@ def inbound_opening_line(
     return _fallback_inbound_opening(agent_name, business_name)
 
 
-async def _speak_opening_31(session, instructions: str) -> None:
-    """Gemini 3.1 Live ignores generate_reply. Send the same turn directly so it still speaks."""
+def outbound_opening_line(
+    prompt: str,
+    *,
+    agent_name: str = "",
+    business_name: str = "",
+) -> str:
+    """Sentence an outbound agent says immediately when the call connects."""
+    text = prompt or ""
+    for label in (
+        "OUTBOUND FIRST LINE",
+        "OUTBOUND OPENING",
+        "OUTBOUND FIRST SENTENCE",
+        "STEP 2 — APNA INTRODUCTION + PERMISSION LO",
+        "STEP 2 — APNA INTRODUCTION",
+        "STEP 2",
+    ):
+        quotes = _spoken_quotes(_section_body(text, label))
+        if quotes:
+            return quotes[0]
+
+    first_line = _section_body(text, "FIRST LINE")
+    if first_line and "inbound" not in first_line.lower():
+        quotes = _spoken_quotes(first_line)
+        if quotes:
+            return quotes[0]
+
+    lowered = text.lower()
+    for marker in ("call connect hote hi", "connect hote hi", "call start"):
+        idx = lowered.find(marker)
+        if idx >= 0:
+            quotes = _spoken_quotes(text[idx : idx + 800])
+            if quotes:
+                return quotes[0]
+
+    idx = text.find("STEP 2")
+    if idx >= 0:
+        quotes = _spoken_quotes(text[idx : idx + 800])
+        if quotes:
+            return quotes[0]
+
+    agent = (agent_name or "").strip()
+    business = (business_name or "").strip()
+    if business.lower() in {"", "our company", "the business"}:
+        business = ""
+    if agent.lower() in {"", "the receptionist"}:
+        agent = ""
+
+    if business and agent:
+        return f"Ji! Main {agent} bol rahi hoon, {business} se. Kya do minute baat ho sakti hai?"
+    if business:
+        return f"Ji! Main {business} se bol rahi hoon. Kya do minute baat ho sakti hai?"
+    if agent:
+        return f"Ji! Main {agent} bol rahi hoon. Kya do minute baat ho sakti hai?"
+    return "Ji namaste! Kya do minute baat ho sakti hai?"
+
+
+async def _speak_opening_31(session, instructions: str, *, exact_text: Optional[str] = None) -> None:
+    """Gemini 3.1 Live opening line. Tries session.say first for sub-second onset, then direct turn."""
+    if exact_text and exact_text.strip():
+        clean_text = exact_text.strip()
+        try:
+            session.clear_user_turn()
+        except Exception:
+            pass
+        try:
+            handle = session.say(clean_text, allow_interruptions=True, add_to_chat_ctx=True)
+            await _log("info", f"Immediate opening line triggered (3.1 say): {clean_text[:120]}")
+            await asyncio.wait_for(handle.wait_for_playout(), timeout=15)
+            interrupted = bool(getattr(handle, "interrupted", False))
+            if not interrupted:
+                await _log("info", "Opening line playout completed successfully (3.1 say)")
+                return
+            await _log("info", "Opening line interrupted by caller (3.1 say)")
+            return
+        except Exception as exc:
+            await _log("warning", f"3.1 session.say not supported or failed ({exc}), falling back to direct event")
+
     from google.genai import types as gt
+    speech_text = exact_text.strip() if (exact_text and exact_text.strip()) else instructions
 
     for attempt in (1, 2, 3):
         try:
@@ -172,7 +248,7 @@ async def _speak_opening_31(session, instructions: str) -> None:
                 await asyncio.sleep(2)
                 continue
             await _log("warning", "Gemini 3.1 session never became ready — falling back to generate_reply")
-            await _speak_opening(session, instructions)
+            await _speak_opening(session, instructions, exact_text=exact_text)
             return
         started = asyncio.Event()
         finished = asyncio.Event()
@@ -189,7 +265,7 @@ async def _speak_opening_31(session, instructions: str) -> None:
             send(
                 gt.LiveClientContent(
                     turns=[
-                        gt.Content(parts=[gt.Part(text=instructions)], role="model"),
+                        gt.Content(parts=[gt.Part(text=speech_text)], role="model"),
                         gt.Content(parts=[gt.Part(text=".")], role="user"),
                     ],
                     turn_complete=True,
@@ -209,11 +285,30 @@ async def _speak_opening_31(session, instructions: str) -> None:
         finally:
             session.off("agent_state_changed", _on_state)
     await _log("warning", "3.1 direct send exhausted — falling back to generate_reply")
-    await _speak_opening(session, instructions)
+    await _speak_opening(session, instructions, exact_text=exact_text)
 
 
-async def _speak_opening(session, instructions: str) -> None:
-    """Say the inbound opener. Retry once if the turn is empty or cut off by line noise."""
+async def _speak_opening(session, instructions: str, *, exact_text: Optional[str] = None) -> None:
+    """Say the opening line. Uses session.say(exact_text) for instant playout without LLM latency."""
+    if exact_text and exact_text.strip():
+        clean_text = exact_text.strip()
+        try:
+            session.clear_user_turn()
+        except Exception as exc:
+            await _log("warning", f"Could not clear buffered caller audio: {exc}")
+        try:
+            handle = session.say(clean_text, allow_interruptions=True, add_to_chat_ctx=True)
+            await _log("info", f"Instant opening line triggered via say(): {clean_text[:120]}")
+            await asyncio.wait_for(handle.wait_for_playout(), timeout=15)
+            interrupted = bool(getattr(handle, "interrupted", False))
+            if not interrupted:
+                await _log("info", "Opening line playout completed successfully")
+                return
+            await _log("info", "Opening line interrupted by caller")
+            return
+        except Exception as exc:
+            await _log("warning", f"session.say failed ({exc}), falling back to generate_reply")
+
     for attempt in (1, 2):
         try:
             session.clear_user_turn()
@@ -749,6 +844,39 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 f"\nSay it in that spirit, without changing the words: {greeting.strip()}"
             )
         await _log("info", f"Inbound opening line: {opening_line}")
+    else:
+        opening_line = outbound_opening_line(
+            system_prompt,
+            agent_name=agent_name_var,
+            business_name=business_name or "",
+        )
+        system_prompt += (
+            "\n\nOPENING LINE\n"
+            "The call just connected. Speak this first sentence out loud now, in one short sentence: "
+            f"\"{opening_line}\"\n"
+            "Do not wait for the caller to speak first."
+        )
+        await _log("info", f"Outbound opening line prepared: {opening_line}")
+
+    # ── Pre-load tools & build session BEFORE dialing so answering has zero latency ──
+    active_tools = tool_ctx.build_tool_list(enabled_tools)
+    await _log("info", f"Tools loaded: {[t.__name__ for t in active_tools]}")
+    try:
+        from prompts import build_tools_context, _tool_definition
+        tools_context = build_tools_context(active_tools)
+        await tool_ctx.load_http_tools()
+        if tool_ctx.http_tools:
+            await _log("info", f"HTTP tools loaded: {[t.get('name') for t in tool_ctx.http_tools]}")
+            http_lines = [_tool_definition(t.get("name", "?"), t.get("description", "")) for t in tool_ctx.http_tools]
+            tools_context = (tools_context + "\n" + "\n".join(http_lines)).strip()
+        if "{{tools}}" in system_prompt:
+            system_prompt = system_prompt.replace("{{tools}}", tools_context or "no custom integrations")
+    except Exception as _hte:
+        await _log("warning", f"Could not fill {{tools}} context: {_hte}")
+
+    gemini_model = _live_model(model_override)
+    model_override = gemini_model
+    opening_voice = voice_override or os.getenv("GEMINI_TTS_VOICE", "Aoede")
 
     if audio_mode == "deepgram":
         if _deepgram_stt is None or not os.getenv("DEEPGRAM_API_KEY"):
@@ -759,6 +887,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             await _log("error", "Deepgram mode still needs GOOGLE_API_KEY so Gemini can think and speak")
             ctx.shutdown()
             return
+        await _log("info", f"Building AI session — mode=deepgram+gemini model=gemini-2.5-flash voice={opening_voice}")
+    else:
+        await _log("info", f"Building AI session — mode={audio_mode or 'gemini-live'} model={gemini_model} voice={opening_voice}")
+
+    session = _build_session(
+        tools=active_tools,
+        system_prompt=system_prompt,
+        model=model_override,
+        voice=voice_override,
+        audio_mode=audio_mode,
+    )
 
     # ── Connect ──────────────────────────────────────────────────────────────
     await ctx.connect()
@@ -803,6 +942,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             dial_number = phone_number  # Telnyx, Vobiz, and Twilio all use plain E.164
         await _log("info", f"Dialing {phone_number} via SIP trunk {trunk_id} (provider={sip_provider}, dial={dial_number})")
         try:
+            from google.protobuf import duration_pb2 as _dpb
             await ctx.api.sip.create_sip_participant(
                 api.CreateSIPParticipantRequest(
                     room_name=ctx.room.name,
@@ -810,6 +950,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     sip_call_to=dial_number,
                     participant_identity=f"sip_{phone_number}",
                     wait_until_answered=True,
+                    max_call_duration=_dpb.Duration(seconds=3600),
+                    ringing_timeout=_dpb.Duration(seconds=60),
                 )
             )
         except Exception as exc:
@@ -836,53 +978,20 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     elif is_inbound:
         tool_ctx._call_start_time = time.time()
 
-    gemini_model = _live_model(model_override)
-    model_override = gemini_model
-    opening_voice = voice_override or os.getenv("GEMINI_TTS_VOICE", "Aoede")
-
-    # ── Build and start the session ──────────────────────────────────────────
-    if audio_mode == "deepgram":
-        await _log("info", f"Building AI session — mode=deepgram+gemini model=gemini-2.5-flash voice={opening_voice}")
-    else:
-        await _log("info", f"Building AI session — mode={audio_mode or 'gemini-live'} model={gemini_model} voice={opening_voice}")
-    active_tools = tool_ctx.build_tool_list(enabled_tools)
-    await _log("info", f"Tools loaded: {[t.__name__ for t in active_tools]}")
-    # Fill the {{tools}} variable with built-in + user-configured HTTP tools
-    try:
-        from prompts import build_tools_context
-        tools_context = build_tools_context(active_tools)
-        await tool_ctx.load_http_tools()
-        if tool_ctx.http_tools:
-            await _log("info", f"HTTP tools loaded: {[t.get('name') for t in tool_ctx.http_tools]}")
-            from prompts import _tool_definition
-            http_lines = [_tool_definition(t.get("name", "?"), t.get("description", "")) for t in tool_ctx.http_tools]
-            tools_context = (tools_context + "\n" + "\n".join(http_lines)).strip()
-        if "{{tools}}" in system_prompt:
-            system_prompt = system_prompt.replace("{{tools}}", tools_context or "no custom integrations")
-    except Exception as _hte:
-        await _log("warning", f"Could not fill {{tools}} context: {_hte}")
-    session = _build_session(
-        tools=active_tools,
-        system_prompt=system_prompt,
-        model=model_override,
-        voice=voice_override,
-        audio_mode=audio_mode,
-    )
-
     # Use RoomOptions if available (non-deprecated), else fall back
-    # NEVER use close_on_disconnect=True with SIP — drops on any audio blip
+    # Explicit close_on_disconnect=False so SIP audio blips/renegotiations don't drop calls at 2m
     if _HAS_ROOM_OPTIONS:
         from livekit.agents import RoomOptions as _RO
         _session_kwargs = dict(
             room=ctx.room,
             agent=OutboundAssistant(instructions=system_prompt),
-            room_options=_RO(input_options=RoomInputOptions(noise_cancellation=noise_cancellation.BVCTelephony())),
+            room_options=_RO(input_options=RoomInputOptions(noise_cancellation=noise_cancellation.BVCTelephony(), close_on_disconnect=False)),
         )
     else:
         _session_kwargs = dict(
             room=ctx.room,
             agent=OutboundAssistant(instructions=system_prompt),
-            room_input_options=RoomInputOptions(noise_cancellation=noise_cancellation.BVCTelephony()),
+            room_input_options=RoomInputOptions(noise_cancellation=noise_cancellation.BVCTelephony(), close_on_disconnect=False),
         )
 
     await session.start(**_session_kwargs)
@@ -1014,9 +1123,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             "Do not call any tool before this sentence."
         )
         if "3.1" in gemini_model and audio_mode != "deepgram":
-            await _speak_opening_31(session, opening)
+            await _speak_opening_31(session, opening, exact_text=opening_line)
         else:
-            await _speak_opening(session, opening)
+            await _speak_opening(session, opening, exact_text=opening_line)
     else:
         opening = (
             "The call just connected. Do not greet: no hi, hello, good morning, "
@@ -1025,9 +1134,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             "Do not wait for the caller, and do not call any tool before this sentence."
         )
         if "3.1" in gemini_model and audio_mode != "deepgram":
-            await _speak_opening_31(session, opening)
+            await _speak_opening_31(session, opening, exact_text=opening_line)
         else:
-            await _speak_opening(session, opening)
+            await _speak_opening(session, opening, exact_text=opening_line)
 
     # ── Wait for SIP participant to leave, then fallback-log if needed ────────
     if phone_number or is_inbound:

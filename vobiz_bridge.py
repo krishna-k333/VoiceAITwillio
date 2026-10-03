@@ -120,7 +120,7 @@ async def handle_vobiz_websocket(websocket: WebSocket):
                     await lk_api.room.create_room(
                         api.CreateRoomRequest(
                             name=room_name,
-                            empty_timeout=30,
+                            empty_timeout=3600,
                             agents=[
                                 api.RoomAgentDispatch(
                                     agent_name="outbound-caller",

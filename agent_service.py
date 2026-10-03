@@ -439,7 +439,7 @@ async def place_outbound_call(
         ctx.verify_mode = ssl.CERT_NONE
         session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ctx))
         lk = lk_api.LiveKitAPI(url=url, api_key=key, api_secret=secret, session=session)
-        await lk.room.create_room(lk_api.CreateRoomRequest(name=room_name, empty_timeout=300, max_participants=5))
+        await lk.room.create_room(lk_api.CreateRoomRequest(name=room_name, empty_timeout=3600, max_participants=5))
         await lk.agent_dispatch.create_dispatch(
             lk_api.CreateAgentDispatchRequest(
                 agent_name="outbound-caller", room=room_name, metadata=json.dumps(metadata)
