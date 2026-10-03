@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import time
 from typing import Optional
 
@@ -78,7 +79,7 @@ class AppointmentTools(llm.ToolContext):
         all_methods = [
             self.check_availability, self.book_appointment, self.end_call, self.hangup,
             self.transfer_to_human, self.send_sms_confirmation, self.send_email,
-            self.create_google_calendar_event, self.http_request,
+            self.create_google_calendar_event, self.verify_email_address, self.http_request,
             self.lookup_contact, self.remember_details, self.book_calcom, self.cancel_calcom,
         ]
         name_map = {m.__name__: m for m in all_methods}
@@ -90,10 +91,27 @@ class AppointmentTools(llm.ToolContext):
         for n in enabled:
             if n in name_map and n not in needed_names:
                 needed_names.append(n)
+        if (
+            "verify_email_address" not in needed_names
+            and ("book_appointment" in needed_names or "send_email" in needed_names)
+        ):
+            needed_names.append("verify_email_address")
         for core in ("hangup", "end_call"):
             if core not in needed_names and core in name_map:
                 needed_names.append(core)
         return [name_map[n] for n in needed_names]
+
+    @llm.function_tool
+    async def verify_email_address(self, email: str) -> str:
+        """Check an email address format after the caller confirms it aloud."""
+        normalized = (email or "").strip().lower()
+        valid = re.fullmatch(
+            r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+",
+            normalized,
+        )
+        if not valid:
+            return "That email address does not look complete. Ask the caller to repeat it slowly, then confirm it aloud before trying again."
+        return f"Email address confirmed: {normalized}. You may now use this exact address for the confirmation email."
 
     @llm.function_tool
     async def check_availability(self, date: str, time: str) -> str:

@@ -53,6 +53,11 @@ AGENT_TOOLS = [
         "when": "After a booking.",
     },
     {
+        "name": "verify_email_address",
+        "description": "Checks an email address format after the caller confirms it aloud.",
+        "when": "Before sending an email or booking with an email address.",
+    },
+    {
         "name": "send_email",
         "description": "Sends a branded confirmation email with the persona's theme colors.",
         "when": "After a booking when email is available, or when the caller asks for email confirmation.",
