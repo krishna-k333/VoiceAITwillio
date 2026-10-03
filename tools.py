@@ -57,7 +57,39 @@ class AppointmentTools(llm.ToolContext):
         self._booking_completed = False
         self._last_booking_summary = ""
         self.http_tools: list = []  # user-configured HTTP request tools
+        self.session = None  # LiveKit AgentSession, set by agent.py to speak fillers
         super().__init__(tools=[])
+
+    def _say_filler(self, action: str = "check") -> None:
+        """Play a brief natural verbal filler so the caller never hears dead silence during tool execution."""
+        session = getattr(self, "session", None)
+        if not session:
+            return
+        is_english = False
+        if self.persona_data and isinstance(self.persona_data, dict):
+            prompt = str(self.persona_data.get("prompt") or "").lower()
+            if "english" in prompt and "hindi" not in prompt:
+                is_english = True
+
+        if is_english:
+            phrases = {
+                "check": "Sure, let me check the schedule for you...",
+                "book": "One second, confirming and booking that for you now...",
+                "send": "Sending those details over to you now...",
+                "general": "One moment please...",
+            }
+        else:
+            phrases = {
+                "check": "Ji bilkul, main ek second schedule check kar leti hoon...",
+                "book": "Ji, main appointment confirm kar rahi hoon, bas ek second...",
+                "send": "Ji, main details abhi bhej rahi hoon...",
+                "general": "Ji, bas ek moment...",
+            }
+        text = phrases.get(action, phrases["general"])
+        try:
+            session.say(text, allow_interruptions=False, add_to_chat_ctx=False)
+        except Exception as exc:
+            logger.debug("Could not play tool filler: %s", exc)
 
     async def load_http_tools(self) -> None:
         """Load enabled user-defined HTTP request tools from the database."""
@@ -88,6 +120,7 @@ class AppointmentTools(llm.ToolContext):
         date format: YYYY-MM-DD  |  time format: HH:MM (24-hour)
         Returns 'available' or 'unavailable: next available slot is <slot>'.
         """
+        self._say_filler("check")
         try:
             if await check_slot(date, time):
                 return "available"
@@ -104,6 +137,7 @@ class AppointmentTools(llm.ToolContext):
         name: lead's full name | phone: with country code | date: YYYY-MM-DD | time: HH:MM | service: type
         email: caller's email address — if provided, sends confirmation email and creates Google Calendar event
         """
+        self._say_filler("book")
         try:
             booking_id = await insert_appointment(name, phone, date, time, service)
         except Exception as exc:
@@ -238,6 +272,7 @@ class AppointmentTools(llm.ToolContext):
         Send SMS confirmation after a successful booking. Skips silently if Twilio not configured.
         phone: lead's phone | message: text to send
         """
+        self._say_filler("send")
         sid = os.getenv("TWILIO_ACCOUNT_SID", "")
         token = os.getenv("TWILIO_AUTH_TOKEN", "")
         from_num = os.getenv("TWILIO_FROM_NUMBER", "")
@@ -260,6 +295,7 @@ class AppointmentTools(llm.ToolContext):
         headline: big text at the top (e.g. "Appointment Confirmed!")
         message: the main body text
         """
+        self._say_filler("send")
         if not self.persona_data:
             return "Email skipped: no persona data available."
         try:
@@ -292,6 +328,7 @@ class AppointmentTools(llm.ToolContext):
         name: person's name | email: their email | date: YYYY-MM-DD | time: HH:MM | service: service type
         phone: optional phone number
         """
+        self._say_filler("general")
         if not self.persona_data:
             return "Calendar skipped: no persona data available."
         try:
@@ -316,6 +353,7 @@ class AppointmentTools(llm.ToolContext):
         params: JSON object of field values to substitute into the tool's URL/body (optional)
         Only call tools listed in your instructions. Returns the API response or an error.
         """
+        self._say_filler("general")
         tool = next((t for t in self.http_tools if t.get("name") == tool_name), None)
         if not tool:
             available = ", ".join(t.get("name", "?") for t in self.http_tools) or "none"
@@ -429,6 +467,7 @@ class AppointmentTools(llm.ToolContext):
         Book in Cal.com calendar after book_appointment succeeds.
         name: full name | email: lead's email | date: YYYY-MM-DD | start_time: HH:MM | notes: optional
         """
+        self._say_filler("book")
         api_key = os.getenv("CALCOM_API_KEY", "")
         event_type_id = os.getenv("CALCOM_EVENT_TYPE_ID", "")
         timezone = os.getenv("CALCOM_TIMEZONE", "Asia/Kolkata")

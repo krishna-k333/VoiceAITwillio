@@ -210,29 +210,9 @@ def outbound_opening_line(
     return "Ji namaste! Kya do minute baat ho sakti hai?"
 
 
-async def _speak_opening_31(session, instructions: str, *, exact_text: Optional[str] = None) -> None:
-    """Gemini 3.1 Live opening line. Tries session.say first for sub-second onset, then direct turn."""
-    if exact_text and exact_text.strip():
-        clean_text = exact_text.strip()
-        try:
-            session.clear_user_turn()
-        except Exception:
-            pass
-        try:
-            handle = session.say(clean_text, allow_interruptions=True, add_to_chat_ctx=True)
-            await _log("info", f"Immediate opening line triggered (3.1 say): {clean_text[:120]}")
-            await asyncio.wait_for(handle.wait_for_playout(), timeout=15)
-            interrupted = bool(getattr(handle, "interrupted", False))
-            if not interrupted:
-                await _log("info", "Opening line playout completed successfully (3.1 say)")
-                return
-            await _log("info", "Opening line interrupted by caller (3.1 say)")
-            return
-        except Exception as exc:
-            await _log("warning", f"3.1 session.say not supported or failed ({exc}), falling back to direct event")
-
+async def _speak_opening_31(session, instructions: str) -> None:
+    """Gemini 3.1 Live dynamic opening. Sends trigger event so Gemini generates the greeting turn from its prompt."""
     from google.genai import types as gt
-    speech_text = exact_text.strip() if (exact_text and exact_text.strip()) else instructions
 
     for attempt in (1, 2, 3):
         try:
@@ -248,7 +228,7 @@ async def _speak_opening_31(session, instructions: str, *, exact_text: Optional[
                 await asyncio.sleep(2)
                 continue
             await _log("warning", "Gemini 3.1 session never became ready — falling back to generate_reply")
-            await _speak_opening(session, instructions, exact_text=exact_text)
+            await _speak_opening(session, instructions)
             return
         started = asyncio.Event()
         finished = asyncio.Event()
@@ -265,8 +245,7 @@ async def _speak_opening_31(session, instructions: str, *, exact_text: Optional[
             send(
                 gt.LiveClientContent(
                     turns=[
-                        gt.Content(parts=[gt.Part(text=speech_text)], role="model"),
-                        gt.Content(parts=[gt.Part(text=".")], role="user"),
+                        gt.Content(parts=[gt.Part(text=instructions)], role="user"),
                     ],
                     turn_complete=True,
                 )
@@ -276,39 +255,20 @@ async def _speak_opening_31(session, instructions: str, *, exact_text: Optional[
                 await asyncio.wait_for(finished.wait(), timeout=20)
             except asyncio.TimeoutError:
                 pass
-            await _log("info", "Opening line played (3.1 direct)")
+            await _log("info", "Opening greeting played (3.1 direct)")
             return
         except asyncio.TimeoutError:
-            await _log("warning", f"Opening line did not play (3.1 attempt {attempt})")
+            await _log("warning", f"Opening greeting did not play (3.1 attempt {attempt})")
         except Exception as exc:
-            await _log("warning", f"Opening line send failed (3.1 attempt {attempt}): {exc}")
+            await _log("warning", f"Opening greeting send failed (3.1 attempt {attempt}): {exc}")
         finally:
             session.off("agent_state_changed", _on_state)
     await _log("warning", "3.1 direct send exhausted — falling back to generate_reply")
-    await _speak_opening(session, instructions, exact_text=exact_text)
+    await _speak_opening(session, instructions)
 
 
-async def _speak_opening(session, instructions: str, *, exact_text: Optional[str] = None) -> None:
-    """Say the opening line. Uses session.say(exact_text) for instant playout without LLM latency."""
-    if exact_text and exact_text.strip():
-        clean_text = exact_text.strip()
-        try:
-            session.clear_user_turn()
-        except Exception as exc:
-            await _log("warning", f"Could not clear buffered caller audio: {exc}")
-        try:
-            handle = session.say(clean_text, allow_interruptions=True, add_to_chat_ctx=True)
-            await _log("info", f"Instant opening line triggered via say(): {clean_text[:120]}")
-            await asyncio.wait_for(handle.wait_for_playout(), timeout=15)
-            interrupted = bool(getattr(handle, "interrupted", False))
-            if not interrupted:
-                await _log("info", "Opening line playout completed successfully")
-                return
-            await _log("info", "Opening line interrupted by caller")
-            return
-        except Exception as exc:
-            await _log("warning", f"session.say failed ({exc}), falling back to generate_reply")
-
+async def _speak_opening(session, instructions: str) -> None:
+    """Say the opening greeting dynamically according to the prompt at the first second."""
     for attempt in (1, 2):
         try:
             session.clear_user_turn()
@@ -319,7 +279,7 @@ async def _speak_opening(session, instructions: str, *, exact_text: Optional[str
             handle = session.generate_reply(instructions=instructions)
             await asyncio.wait_for(handle.wait_for_playout(), timeout=15)
         except asyncio.TimeoutError:
-            await _log("warning", f"Opening line timed out (attempt {attempt})")
+            await _log("warning", f"Opening greeting timed out (attempt {attempt})")
             try:
                 await session.interrupt()
             except Exception:
@@ -332,19 +292,19 @@ async def _speak_opening(session, instructions: str, *, exact_text: Optional[str
         said = _spoken_from_handle(handle)
         if not interrupted:
             if said:
-                await _log("info", f"Opening line played: {said[:160]}")
+                await _log("info", f"Opening greeting played: {said[:160]}")
             else:
-                await _log("info", "Opening line playout completed successfully")
+                await _log("info", "Opening greeting playout completed successfully")
             return
         await _log(
             "warning",
-            f"Opening line did not play (attempt {attempt}, interrupted={interrupted})",
+            f"Opening greeting did not play (attempt {attempt}, interrupted={interrupted})",
         )
         try:
             await session.interrupt()
         except Exception:
             pass
-    await _log("warning", "Opening line did not play")
+    await _log("warning", "Opening greeting did not play")
 
 
 def _spoken_from_handle(handle) -> str:
@@ -845,18 +805,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             )
         await _log("info", f"Inbound opening line: {opening_line}")
     else:
-        opening_line = outbound_opening_line(
-            system_prompt,
-            agent_name=agent_name_var,
-            business_name=business_name or "",
-        )
         system_prompt += (
-            "\n\nOPENING LINE\n"
-            "The call just connected. Speak this first sentence out loud now, in one short sentence: "
-            f"\"{opening_line}\"\n"
+            "\n\nOPENING GREETING RULE:\n"
+            "The call just connected. Start talking immediately at this very first second! "
+            "Greet the caller warmly according to your prompt instructions, introduce yourself and the company, "
+            "and politely ask for a quick 2 minutes to talk. "
             "Do not wait for the caller to speak first."
         )
-        await _log("info", f"Outbound opening line prepared: {opening_line}")
+        await _log("info", "Outbound prompt configured with dynamic first-second greeting")
 
     # ── Pre-load tools & build session BEFORE dialing so answering has zero latency ──
     active_tools = tool_ctx.build_tool_list(enabled_tools)
@@ -898,6 +854,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         voice=voice_override,
         audio_mode=audio_mode,
     )
+    tool_ctx.session = session  # Allow tools to speak natural verbal fillers while running
 
     # ── Connect ──────────────────────────────────────────────────────────────
     await ctx.connect()
@@ -1117,26 +1074,26 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # produces an empty turn.
     if is_inbound:
         opening = (
-            "The caller is already listening. Say this exact sentence out loud now, then stop: "
-            f"\"{opening_line}\" "
-            "Do not stay silent. Do not wait for them to speak first. "
-            "Do not call any tool before this sentence."
+            "The caller just connected and is waiting to hear your voice. "
+            "Start talking immediately at this very first second. "
+            "Greet the caller warmly in your persona, state how you can help, and listen. "
+            "Do not stay silent and do not wait for the caller to speak first."
         )
         if "3.1" in gemini_model and audio_mode != "deepgram":
-            await _speak_opening_31(session, opening, exact_text=opening_line)
+            await _speak_opening_31(session, opening)
         else:
-            await _speak_opening(session, opening, exact_text=opening_line)
+            await _speak_opening(session, opening)
     else:
         opening = (
-            "The call just connected. Do not greet: no hi, hello, good morning, "
-            "and do not ask if you are speaking with them. "
-            "Say the first real line of your instructions now, in one short sentence. "
-            "Do not wait for the caller, and do not call any tool before this sentence."
+            "The call just connected. Start talking immediately at this very first second. "
+            "Greet the caller warmly according to your prompt, introduce yourself and the company, "
+            "and politely ask for a quick 2 minutes to talk in 1-2 natural sentences. "
+            "Do not wait for the caller to speak first."
         )
         if "3.1" in gemini_model and audio_mode != "deepgram":
-            await _speak_opening_31(session, opening, exact_text=opening_line)
+            await _speak_opening_31(session, opening)
         else:
-            await _speak_opening(session, opening, exact_text=opening_line)
+            await _speak_opening(session, opening)
 
     # ── Wait for SIP participant to leave, then fallback-log if needed ────────
     if phone_number or is_inbound:
