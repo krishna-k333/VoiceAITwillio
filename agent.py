@@ -27,6 +27,18 @@ def _certifi_ssl(purpose=ssl.Purpose.SERVER_AUTH, **kwargs):
     return _orig_ssl(purpose, **kwargs)
 ssl.create_default_context = _certifi_ssl
 
+# Patch aiohttp.StreamReader.readline: google-genai SDK incorrectly passes max_line_length
+# which aiohttp.StreamReader does not accept.
+try:
+    import aiohttp
+    _orig_readline = aiohttp.StreamReader.readline
+    async def _patched_readline(self, *args, **kwargs):
+        kwargs.pop("max_line_length", None)
+        return await _orig_readline(self, *args, **kwargs)
+    aiohttp.StreamReader.readline = _patched_readline
+except Exception:
+    pass
+
 from livekit import agents, api, rtc
 from livekit.agents import Agent, AgentSession, RoomInputOptions
 try:
@@ -223,8 +235,11 @@ async def _speak_opening(session, instructions: str) -> None:
             continue
         interrupted = bool(getattr(handle, "interrupted", False))
         said = _spoken_from_handle(handle)
-        if said and not interrupted:
-            await _log("info", f"Opening line played: {said[:160]}")
+        if not interrupted:
+            if said:
+                await _log("info", f"Opening line played: {said[:160]}")
+            else:
+                await _log("info", "Opening line playout completed successfully")
             return
         await _log(
             "warning",
@@ -387,28 +402,55 @@ def _build_session(
         raise RuntimeError("Deepgram plugin is not installed. Run: pip install livekit-plugins-deepgram")
     if not os.getenv("DEEPGRAM_API_KEY"):
         raise RuntimeError("DEEPGRAM_API_KEY is not set. Deepgram mode needs it in .env")
-    # 400ms of silence before a turn ends. The plugin default of 25ms cuts people off on a phone line.
+    # 350ms silence endpointing for responsive conversational turns without cutoffs
     stt = _deepgram_stt(
         model="nova-3",
         language="multi",
-        endpointing_ms=400,
+        endpointing_ms=350,
         interim_results=True,
         punctuate=True,
         smart_format=True,
         api_key=os.getenv("DEEPGRAM_API_KEY"),
     )
+    valid_gemini_voices = {
+        'Zephyr', 'Puck', 'Charon', 'Kore', 'Fenrir', 'Leda', 'Orus', 'Aoede',
+        'Callirrhoe', 'Autonoe', 'Enceladus', 'Iapetus', 'Umbriel', 'Algieba',
+        'Despina', 'Erinome', 'Algenib', 'Rasalgethi', 'Laomedeia', 'Achernar',
+        'Alnilam', 'Schedar', 'Gacrux', 'Pulcherrima', 'Achird', 'Zubenelgenubi',
+        'Vindemiatrix', 'Sadachbia', 'Sadaltager', 'Sulafat'
+    }
+    chosen_voice = gemini_voice if gemini_voice in valid_gemini_voices else "Sulafat"
     try:
         from livekit.plugins.google.beta.gemini_tts import TTS as GeminiTTS
-        tts = GeminiTTS(model="gemini-2.5-flash-preview-tts", voice_name=gemini_voice or "Sulafat")
+        tts = GeminiTTS(
+            model="gemini-2.5-flash-preview-tts",
+            voice_name=chosen_voice,
+            api_key=os.getenv("GOOGLE_API_KEY"),
+        )
     except Exception as exc:
-        raise RuntimeError(f"Gemini TTS could not start for Deepgram mode: {exc}") from exc
-    # The live model speaks. This pipeline needs a text model.
+        logger.warning("Gemini TTS could not start, checking Deepgram TTS fallback: %s", exc)
+        try:
+            from livekit.plugins import deepgram as _dg
+            tts = _dg.TTS(model="aura-asteria-en", api_key=os.getenv("DEEPGRAM_API_KEY"))
+            logger.info("Using Deepgram TTS (aura-asteria-en) as fallback")
+        except Exception as dg_exc:
+            raise RuntimeError(f"TTS could not start for Deepgram mode: {exc} | fallback error: {dg_exc}") from exc
+    # Responsive pipeline session: low endpointing delay, silero VAD tuned for telephony
+    vad = silero.VAD.load(
+        min_speech_duration=0.05,
+        min_silence_duration=0.45,
+        prefix_padding_duration=0.3,
+    )
     return AgentSession(
         stt=stt,
         llm=_google_llm(model="gemini-2.5-flash"),
         tts=tts,
-        vad=silero.VAD.load(),
+        vad=vad,
         tools=tools,
+        min_endpointing_delay=0.1,
+        max_endpointing_delay=0.5,
+        allow_interruptions=True,
+        min_consecutive_speech_delay=0.0,
     )
 
 
@@ -597,6 +639,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             await _log("info", f"Built-in inbound persona loaded: {_persona_id}")
         except Exception as _pe:
             await _log("warning", f"Could not load built-in inbound persona: {_pe}")
+
+    if not audio_mode:
+        use_rt = os.getenv("USE_GEMINI_REALTIME", "true").lower() != "false"
+        audio_mode = "gemini" if use_rt else "deepgram"
 
     if custom_prompt and "THIS CALL:" not in custom_prompt:
         if is_inbound:
@@ -981,11 +1027,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         if "3.1" in gemini_model and audio_mode != "deepgram":
             await _speak_opening_31(session, opening)
         else:
-            try:
-                await session.generate_reply(instructions=opening)
-                await _log("info", "Opening line triggered via generate_reply — no greeting")
-            except Exception as _gr_exc:
-                await _log("warning", f"generate_reply failed: {_gr_exc}")
+            await _speak_opening(session, opening)
 
     # ── Wait for SIP participant to leave, then fallback-log if needed ────────
     if phone_number or is_inbound:
