@@ -449,6 +449,13 @@ async def build_from_brief(brief: str, direction: str = "both", name: str = "") 
         "voice": os.getenv("GEMINI_TTS_VOICE", "Sulafat") or "Sulafat",
         "model": "gemini-3.1-flash-live-preview",
         "audio_mode": "gemini",
+        "prompt_vars": {
+            "business_name": title,
+            "agent_name": _agent_name(name or title),
+            "niche": "appointment and enquiry handling",
+            "primary_goal": "understand the caller's need and book a time when appropriate",
+            "knowledge_base": brief[:2000],
+        },
     }
 
 
@@ -471,4 +478,11 @@ async def build_from_target(target: str, direction: str = "both") -> dict:
         "voice": os.getenv("GEMINI_TTS_VOICE", "Sulafat") or "Sulafat",
         "model": "gemini-3.1-flash-live-preview",
         "audio_mode": "gemini",
+        "prompt_vars": {
+            "business_name": title or target[:80],
+            "agent_name": _agent_name(title),
+            "niche": "appointment and enquiry handling",
+            "primary_goal": "understand the caller's need and book a time when appropriate",
+            "knowledge_base": text[:2000],
+        },
     }

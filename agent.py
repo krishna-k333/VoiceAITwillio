@@ -37,7 +37,7 @@ except ImportError:
 from livekit.plugins import noise_cancellation, silero
 
 from db import init_db, log_call as _db_log_call, log_call_sync as _db_log_call_sync, log_error, get_enabled_tools, get_setting
-from prompts import build_prompt, INBOUND_SYSTEM_PROMPT
+from prompts import build_prompt, render_prompt, INBOUND_SYSTEM_PROMPT
 from tools import AppointmentTools
 
 load_dotenv(".env")
@@ -533,9 +533,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     # ── Persona: local database, then the old built-in inbound list ───────────
     _inbound_persona_data = None
+    prompt_vars: dict = {}
 
     def _apply_saved_persona(saved: dict) -> None:
-        nonlocal custom_prompt, voice_override, model_override, tools_override, audio_mode, agent_name_var, business_name, _inbound_persona_data
+        nonlocal custom_prompt, voice_override, model_override, tools_override, audio_mode, agent_name_var, business_name, prompt_vars, _inbound_persona_data
         if saved.get("system_prompt") and not custom_prompt:
             custom_prompt = saved["system_prompt"]
         if not voice_override and saved.get("voice"):
@@ -550,6 +551,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             agent_name_var = saved["agent_name"]
         if business_name in ("our company", "", None):
             business_name = saved.get("name") or business_name
+        if isinstance(saved.get("prompt_vars"), dict):
+            prompt_vars.update(saved["prompt_vars"])
         _inbound_persona_data = {
             "name": saved.get("name"),
             "agent_name": saved.get("agent_name"),
@@ -615,22 +618,63 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         value = meta.get(key) if key in meta else fallback
         return value if isinstance(value, str) else ("" if value is None else str(value))
 
-    system_prompt = build_prompt(
-        lead_name=lead_name, lead_phone=phone_number or "",
-        business_name=business_name or "our company",
-        service_type=_from_job("service_type", service_type),
-        agent_name=agent_name_var,
-        project_name=_from_job("project_name", project_name),
-        project_type=_from_job("project_type", project_type),
-        project_location=_from_job("project_location", project_location),
-        project_status=_from_job("project_status", project_status),
-        key_benefit_1=_from_job("key_benefit_1", key_benefit_1),
-        key_benefit_2=_from_job("key_benefit_2", key_benefit_2),
-        key_benefit_3=_from_job("key_benefit_3", key_benefit_3),
-        site_visit_day_1=_from_job("site_visit_day_1", site_visit_day_1),
-        site_visit_day_2=_from_job("site_visit_day_2", site_visit_day_2),
-        custom_prompt=custom_prompt, inbound=is_inbound,
-    )
+    tool_ctx = AppointmentTools(ctx, phone_number, lead_name, is_inbound=is_inbound, persona_data=_inbound_persona_data)
+
+    if tools_override:
+        try:
+            enabled_tools = json.loads(tools_override)
+        except Exception:
+            enabled_tools = await get_enabled_tools()
+    else:
+        enabled_tools = await get_enabled_tools()
+
+    # ── Build variables for {{dynamic}} prompt template ─────────────────────
+    # persona prompt_vars (niche, goal, tone, etc.) merge with call metadata;
+    # call-time fields (lead name, phone) always win.
+    variables: dict = dict(prompt_vars)
+    variables.update({
+        "lead_name": lead_name,
+        "lead_phone": phone_number or "",
+        "caller_phone": phone_number or "",
+        "business_name": business_name or "our company",
+        "agent_name": agent_name_var,
+        "service_type": _from_job("service_type", service_type) or "our service",
+        "project_name": _from_job("project_name", project_name),
+        "project_type": _from_job("project_type", project_type),
+        "project_location": _from_job("project_location", project_location),
+        "project_status": _from_job("project_status", project_status),
+        "key_benefit_1": _from_job("key_benefit_1", key_benefit_1),
+        "key_benefit_2": _from_job("key_benefit_2", key_benefit_2),
+        "key_benefit_3": _from_job("key_benefit_3", key_benefit_3),
+        "site_visit_day_1": _from_job("site_visit_day_1", site_visit_day_1),
+        "site_visit_day_2": _from_job("site_visit_day_2", site_visit_day_2),
+    })
+
+    # ── Render the prompt: dynamic {{template}} or legacy {build_prompt} ─────
+    if custom_prompt and "{{" in custom_prompt:
+        system_prompt = render_prompt(custom_prompt, variables)
+        await _log("info", "Prompt rendered from dynamic {{template}}")
+    elif not custom_prompt and not is_inbound:
+        from prompts import build_default_prompt
+        system_prompt = build_default_prompt(variables)
+        await _log("info", "Prompt rendered from generic {{default}} template")
+    else:
+        system_prompt = build_prompt(
+            lead_name=lead_name, lead_phone=phone_number or "",
+            business_name=business_name or "our company",
+            service_type=_from_job("service_type", service_type),
+            agent_name=agent_name_var,
+            project_name=_from_job("project_name", project_name),
+            project_type=_from_job("project_type", project_type),
+            project_location=_from_job("project_location", project_location),
+            project_status=_from_job("project_status", project_status),
+            key_benefit_1=_from_job("key_benefit_1", key_benefit_1),
+            key_benefit_2=_from_job("key_benefit_2", key_benefit_2),
+            key_benefit_3=_from_job("key_benefit_3", key_benefit_3),
+            site_visit_day_1=_from_job("site_visit_day_1", site_visit_day_1),
+            site_visit_day_2=_from_job("site_visit_day_2", site_visit_day_2),
+            custom_prompt=custom_prompt, inbound=is_inbound,
+        )
     opening_line = ""
     if is_inbound:
         # Outbound skips hi/hello and jumps to the script. That ban makes an
@@ -659,15 +703,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 f"\nSay it in that spirit, without changing the words: {greeting.strip()}"
             )
         await _log("info", f"Inbound opening line: {opening_line}")
-    tool_ctx = AppointmentTools(ctx, phone_number, lead_name, is_inbound=is_inbound, persona_data=_inbound_persona_data)
-
-    if tools_override:
-        try:
-            enabled_tools = json.loads(tools_override)
-        except Exception:
-            enabled_tools = await get_enabled_tools()
-    else:
-        enabled_tools = await get_enabled_tools()
 
     if audio_mode == "deepgram":
         if _deepgram_stt is None or not os.getenv("DEEPGRAM_API_KEY"):
@@ -766,6 +801,20 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         await _log("info", f"Building AI session — mode={audio_mode or 'gemini-live'} model={gemini_model} voice={opening_voice}")
     active_tools = tool_ctx.build_tool_list(enabled_tools)
     await _log("info", f"Tools loaded: {[t.__name__ for t in active_tools]}")
+    # Fill the {{tools}} variable with built-in + user-configured HTTP tools
+    try:
+        from prompts import build_tools_context
+        tools_context = build_tools_context(active_tools)
+        await tool_ctx.load_http_tools()
+        if tool_ctx.http_tools:
+            await _log("info", f"HTTP tools loaded: {[t.get('name') for t in tool_ctx.http_tools]}")
+            from prompts import _tool_definition
+            http_lines = [_tool_definition(t.get("name", "?"), t.get("description", "")) for t in tool_ctx.http_tools]
+            tools_context = (tools_context + "\n" + "\n".join(http_lines)).strip()
+        if "{{tools}}" in system_prompt:
+            system_prompt = system_prompt.replace("{{tools}}", tools_context or "no custom integrations")
+    except Exception as _hte:
+        await _log("warning", f"Could not fill {{tools}} context: {_hte}")
     session = _build_session(
         tools=active_tools,
         system_prompt=system_prompt,

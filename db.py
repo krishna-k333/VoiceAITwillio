@@ -760,3 +760,64 @@ async def set_default_agent_profile(profile_id: str) -> None:
     db = await _adb()
     await db.table("agent_profiles").update({"is_default": 0}).neq("id", "placeholder").execute()
     await db.table("agent_profiles").update({"is_default": 1}).eq("id", profile_id).execute()
+
+
+# ── HTTP Request Tools ───────────────────────────────────────────────────────
+
+async def get_http_tools(enabled_only: bool = False) -> list:
+    """Return all custom HTTP request tools. Optionally only enabled ones."""
+    try:
+        db = await _adb()
+        query = db.table("http_tools").select("*").order("created_at")
+        if enabled_only:
+            query = query.eq("enabled", True)
+        result = await query.execute()
+        return result.data or []
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger("outbound-agent").warning(f"get_http_tools fallback (DB offline): {exc}")
+        return []
+
+
+async def create_http_tool(
+    name: str, description: str, url: str, method: str = "GET",
+    headers: Optional[dict] = None, body_template: str = "",
+    timeout: int = 10, enabled: bool = True,
+) -> str:
+    """Create a new HTTP request tool definition."""
+    import json as _json
+    tool_id = str(uuid.uuid4())
+    db = await _adb()
+    await db.table("http_tools").insert({
+        "id": tool_id, "name": name, "description": description,
+        "url": url, "method": (method or "GET").upper(),
+        "headers_json": _json.dumps(headers or {}),
+        "body_template": body_template, "timeout": int(timeout),
+        "enabled": bool(enabled), "created_at": datetime.now().isoformat(),
+    }).execute()
+    return tool_id
+
+
+async def update_http_tool(
+    tool_id: str, name: str, description: str, url: str, method: str = "GET",
+    headers: Optional[dict] = None, body_template: str = "",
+    timeout: int = 10, enabled: bool = True,
+) -> bool:
+    """Update an existing HTTP request tool. Returns True if updated."""
+    import json as _json
+    db = await _adb()
+    result = await db.table("http_tools").update({
+        "name": name, "description": description, "url": url,
+        "method": (method or "GET").upper(),
+        "headers_json": _json.dumps(headers or {}),
+        "body_template": body_template, "timeout": int(timeout),
+        "enabled": bool(enabled),
+    }).eq("id", tool_id).execute()
+    return len(result.data or []) > 0
+
+
+async def delete_http_tool(tool_id: str) -> bool:
+    """Delete an HTTP request tool. Returns True if deleted."""
+    db = await _adb()
+    result = await db.table("http_tools").delete().eq("id", tool_id).execute()
+    return len(result.data or []) > 0

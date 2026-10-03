@@ -1265,6 +1265,26 @@
       letter-spacing: 0.06em;
     }
 
+    .http-tool-row {
+      background: var(--gray-50);
+      border: 1px solid var(--gray-200);
+      border-radius: var(--radius-sm);
+      padding: 14px 16px;
+      margin-bottom: 10px;
+    }
+
+    .btn-sm {
+      padding: 5px 10px !important;
+      font-size: 0.8rem !important;
+      border-radius: 8px !important;
+    }
+
+    .btn-muted-2, .btn-outline {
+      background: rgba(255,255,255,.9);
+      border: 1px solid var(--gray-300);
+      color: var(--text-2);
+    }
+
     /* Inbound overview */
     .ib-active-card {
       background: var(--white);
@@ -1419,8 +1439,8 @@
           <button class="nav-btn" data-stab="agents">
             <span class="nb-icon"><i data-lucide="bot"></i></span><span>Agents</span>
           </button>
-          <button class="nav-btn" data-stab="prompt">
-            <span class="nb-icon"><i data-lucide="pen-line"></i></span><span>AI Prompt</span>
+          <button class="nav-btn" data-stab="http-tools">
+            <span class="nb-icon"><i data-lucide="webhook"></i></span><span>Tools</span>
           </button>
           <button class="nav-btn" data-stab="personas">
             <span class="nb-icon"><i data-lucide="user-round"></i></span><span>Personas</span>
@@ -1850,26 +1870,62 @@
           </div>
         </div>
 
-        <!-- ═══ AI PROMPT TAB ═══ -->
-        <div id="tab-prompt" class="tab-panel">
+        <!-- ═══ TOOLS TAB (HTTP integrations) ═══ -->
+        <div id="tab-http-tools" class="tab-panel">
           <div class="page-header">
-            <div class="page-title">AI Prompt</div>
-            <div class="page-sub">Used when no caller persona is selected for that direction. A persona prompt replaces
-              this for its calls. Saved on this machine, no Supabase needed.</div>
+            <div class="page-title">Tools · HTTP Integrations</div>
+            <div class="page-sub">Add your own API endpoints that the voice agent can call during live calls. Each tool
+              is listed in the {{tools}} section of the prompt, and the agent invokes it by name through http_request.</div>
           </div>
-          <div style="max-width:780px">
-            <div class="card">
-              <h2>Global System Prompt</h2>
-              <textarea id="prompt-editor" rows="22"
-                style="font-family:'Courier New',monospace;font-size:12px"></textarea>
-              <div class="flex flex-between mt8">
-                <span class="text-sm text-muted" id="prompt-chars">0 chars</span>
-                <div class="flex gap8">
-                  <button class="btn-primary" onclick="savePrompt()"><i data-lucide="save"></i> Save</button>
-                  <button class="btn-warn" onclick="resetPrompt()"><i data-lucide="rotate-ccw"></i> Reset to
-                    Default</button>
+
+          <div style="max-width:980px">
+            <div class="card mt8">
+              <h2>Add / Edit HTTP Tool</h2>
+              <div class="grid2 mt8">
+                <div class="form-group"><label>Tool Name</label>
+                  <input id="ht-name" placeholder="e.g. lookup_customer, book_slot" />
+                </div>
+                <div class="form-group"><label>HTTP Method</label>
+                  <select id="ht-method">
+                    <option>GET</option>
+                    <option>POST</option>
+                    <option>PUT</option>
+                    <option>PATCH</option>
+                    <option>DELETE</option>
+                  </select>
                 </div>
               </div>
+              <div class="form-group mt8"><label>Description <span class="text-muted">what this tool does (shown to the AI)</span></label>
+                <textarea id="ht-desc" rows="2" placeholder="Fetches the customer record from your CRM by phone."></textarea>
+              </div>
+              <div class="form-group mt8"><label>URL <span class="text-muted">use {{param}} placeholders, e.g. https://api.example.com/customers/{{phone}}</span></label>
+                <input id="ht-url" placeholder="https://api.example.com/endpoint/{{phone}}" />
+              </div>
+              <div class="grid2 mt8">
+                <div class="form-group"><label>Headers (JSON)</label>
+                  <textarea id="ht-headers" rows="3" placeholder='{"Authorization":"Bearer TOKEN","Content-Type":"application/json"}'></textarea>
+                </div>
+                <div class="form-group"><label>Body Template (JSON, for POST/PUT)</label>
+                  <textarea id="ht-body" rows="3" placeholder='{"customer":"{{name}}","phone":"{{phone}}"}'></textarea>
+                </div>
+              </div>
+              <div class="grid2 mt8">
+                <div class="form-group"><label>Timeout (seconds)</label>
+                  <input id="ht-timeout" type="number" value="10" />
+                </div>
+                <div class="form-group"><label>Enabled</label>
+                  <input type="checkbox" id="ht-enabled" checked />
+                </div>
+              </div>
+              <div class="flex gap8 mt16">
+                <button class="btn-primary" onclick="saveHttpTool()"><i data-lucide="save"></i> Save Tool</button>
+                <button class="btn" onclick="clearHttpForm()">Clear</button>
+              </div>
+            </div>
+
+            <div class="card mt16">
+              <h2>Configured HTTP Tools</h2>
+              <div id="http-tools-list" class="mt8"><span class="text-muted">Loading…</span></div>
             </div>
           </div>
         </div>
@@ -2425,9 +2481,17 @@
                 <option value="deepgram">Deepgram listens, Gemini thinks and speaks</option>
               </select>
             </div>
-            <div class="form-group"><label>Full prompt</label>
+            <div class="form-group"><label>Full prompt <span class="text-muted">(you may use {{variables}} — e.g. {{agent_name}}, {{business_name}}, {{niche}}, {{primary_goal}}, {{tools}} — filled at call time)</span></label>
               <textarea id="persona-prompt" rows="16"
-                placeholder="Full script the agent speaks from: who it is, the exact first line in quotes, each step, what to say to objections, and the facts it is allowed to use. A short summary is not enough."></textarea>
+                placeholder="Full script the agent speaks from: who it is, the exact first line in quotes, each step, what to say to objections, and the facts it is allowed to use. A short summary is not enough. Use {{double_brace}} variables for anything dynamic."></textarea>
+            </div>
+            <div class="form-group"><label>Prompt variables (JSON) <span class="text-muted">values swapped into your {{variables}}. e.g. {"niche":"real estate","primary_goal":"book site visits","tone":"warm and persuasive"}</span></label>
+              <textarea id="persona-vars" rows="5" style="font-family:'Courier New',monospace;font-size:12px"
+                placeholder='{"niche":"appointment booking","primary_goal":"book qualified appointments","caller_type":"a caller","tone":"warm, calm, confident","qualification_criteria":"has a real need","escalation_path":"transfer to the team","compliance_line":"this call may be recorded","allowed_scope":"appointments and availability","niche_specific_instructions":"Keep it short and human."}'></textarea>
+            </div>
+            <div class="flex gap8 mb8">
+              <button type="button" class="btn btn-sm" onclick="previewPersonaPrompt()">Preview prompt</button>
+              <span class="text-sm text-muted" id="persona-vars-hint"></span>
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap">
               <button type="button" class="btn-primary" onclick="savePersonaForm()">Save persona</button>
@@ -2616,7 +2680,7 @@
     // ═══════════════════════════════════════════════════════════════════
     const tabTitles = {
       stats: 'Dashboard', single: 'Single Call', batch: 'Batch Call',
-      campaigns: 'Campaigns', agents: 'Agent Profiles', prompt: 'AI Prompt',
+      campaigns: 'Campaigns', agents: 'Agent Profiles', 'http-tools': 'Tools · HTTP Integrations',
       appointments: 'Appointments', calls: 'Call Logs', crm: 'CRM',
       billing: 'Billing', settings: 'Settings', logs: 'Logs',
       'inbound-overview': 'Inbound Overview', personas: 'Personas',
@@ -2682,7 +2746,7 @@
       else if (name === 'crm') loadCRM();
       else if (name === 'billing') loadBilling();
       else if (name === 'settings') loadSettings();
-      else if (name === 'prompt') loadPrompt();
+      else if (name === 'http-tools') loadHttpTools();
       else if (name === 'campaigns') loadCampaigns();
       else if (name === 'agents') loadAgentProfiles();
       else if (name === 'logs') loadLogs();
@@ -3082,27 +3146,93 @@
     };
 
     // ═══════════════════════════════════════════════════════════════════
-    // AI PROMPT
+    // TOOLS · HTTP INTEGRATIONS
     // ═══════════════════════════════════════════════════════════════════
-    async function loadPrompt() {
+    let _httpTools = [];
+
+    async function loadHttpTools() {
       try {
-        const d = await api('/api/prompt');
-        $('prompt-editor').value = d.prompt || '';
-        $('prompt-chars').textContent = (d.prompt || '').length + ' chars' + (d.is_custom ? ' (custom)' : ' (default)');
-      } catch (e) { }
+        _httpTools = await api('/api/http-tools');
+        renderHttpTools();
+      } catch (e) {
+        $('http-tools-list').innerHTML = '<span class="text-muted">Could not load tools.</span>';
+      }
     }
 
-    window.savePrompt = async () => {
-      const prompt = $('prompt-editor').value;
-      try { await apiPost('/api/prompt', { prompt }); toast('Prompt saved'); loadPrompt(); }
-      catch (e) { toast('Failed to save prompt', 'err'); }
+    function renderHttpTools() {
+      const el = $('http-tools-list');
+      if (!_httpTools.length) {
+        el.innerHTML = '<span class="text-muted">No HTTP tools configured yet. Add one below to expose a custom API to your agents.</span>';
+        return;
+      }
+      el.innerHTML = _httpTools.map(t => {
+        const enabled = t.enabled ? 'badge-ok' : 'badge-muted';
+        const method = (t.method || 'GET').toUpperCase();
+        return `<div class="http-tool-row">
+          <div class="flex flex-between">
+            <div>
+              <strong>${esc(t.name)}</strong>
+              <span class="badge ${enabled}">${t.enabled ? 'active' : 'disabled'}</span>
+            </div>
+            <div class="flex gap8">
+              <button class="btn btn-sm" onclick="editHttpTool('${esc(t.id)}')">Edit</button>
+              <button class="btn-warn btn-sm" onclick="deleteHttpTool('${esc(t.id)}')">Delete</button>
+            </div>
+          </div>
+          <div class="text-sm text-muted mt4">${method} — ${esc(t.url || '')}</div>
+          <div class="text-sm mt4">${esc(t.description || '')}</div>
+        </div>`;
+      }).join('');
+      lucide.createIcons();
+    }
+
+    function esc(s) { return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+    window.editHttpTool = async (id) => {
+      const t = _httpTools.find(x => x.id === id);
+      if (!t) { toast('Tool not found', 'err'); return; }
+      $('ht-name').value = t.name || '';
+      $('ht-method').value = (t.method || 'GET').toUpperCase();
+      $('ht-desc').value = t.description || '';
+      $('ht-url').value = t.url || '';
+      $('ht-headers').value = t.headers_json ? JSON.stringify(JSON.parse(t.headers_json), null, 2) : '';
+      $('ht-body').value = t.body_template || '';
+      $('ht-timeout').value = t.timeout || 10;
+      $('ht-enabled').checked = !!t.enabled;
+      $('ht-name').dataset.editId = t.id;
+      window.scrollTo(0, 0);
     };
 
-    window.resetPrompt = async () => {
-      if (!confirm('Reset to default prompt?')) return;
-      try { const r = await apiDel('/api/prompt'); $('prompt-editor').value = r.prompt || ''; toast('Prompt reset'); loadPrompt(); }
-      catch (e) { toast('Failed to reset', 'err'); }
+    window.clearHttpForm = () => {
+      ['ht-name', 'ht-method', 'ht-desc', 'ht-url', 'ht-headers', 'ht-body'].forEach(id => { const el = $(id); if (el.tagName === 'SELECT') el.value = 'GET'; else el.value = ''; });
+      $('ht-timeout').value = 10;
+      $('ht-enabled').checked = true;
+      $('ht-name').dataset.editId = '';
     };
+
+    window.saveHttpTool = async () => {
+      const payload = {
+        name: $('ht-name').value.trim(), description: $('ht-desc').value.trim(),
+        url: $('ht-url').value.trim(), method: $('ht-method').value,
+        headers: parseJson($('ht-headers').value), body_template: $('ht-body').value.trim(),
+        timeout: parseInt($('ht-timeout').value) || 10, enabled: $('ht-enabled').checked,
+      };
+      if (!payload.name || !payload.url) { toast('Name and URL are required', 'err'); return; }
+      const editId = $('ht-name').dataset.editId;
+      try {
+        if (editId) { await apiPut('/api/http-tools/' + editId, payload); toast('Tool updated'); }
+        else { await apiPost('/api/http-tools', payload); toast('Tool created'); }
+        clearHttpForm(); loadHttpTools();
+      } catch (e) { toast('Failed to save tool: ' + (e.statusText || ''), 'err'); }
+    };
+
+    window.deleteHttpTool = async (id) => {
+      if (!confirm('Delete this HTTP tool?')) return;
+      try { await apiDel('/api/http-tools/' + id); toast('Tool deleted'); loadHttpTools(); }
+      catch (e) { toast('Failed to delete', 'err'); }
+    };
+
+    function parseJson(s) { if (!s) return {}; try { return JSON.parse(s); } catch (e) { toast('Invalid JSON in headers/body', 'err'); return {}; } }
 
     // ═══════════════════════════════════════════════════════════════════
     // APPOINTMENTS
@@ -3492,6 +3622,8 @@
       $('persona-voice').value = 'Sulafat';
       $('persona-audio').value = 'gemini';
       $('persona-prompt').value = '';
+      $('persona-vars').value = '';
+      $('persona-vars-hint').textContent = '';
       $('persona-cancel').style.display = 'none';
     }
 
@@ -3506,12 +3638,33 @@
       $('persona-voice').value = p.voice || 'Sulafat';
       $('persona-audio').value = p.audio_mode || 'gemini';
       $('persona-prompt').value = p.system_prompt || '';
+      $('persona-vars').value = p.prompt_vars && Object.keys(p.prompt_vars).length ? JSON.stringify(p.prompt_vars, null, 2) : '';
+      $('persona-vars-hint').textContent = '';
       $('persona-cancel').style.display = '';
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
+    window.previewPersonaPrompt = () => {
+      const tmpl = $('persona-prompt').value;
+      let vars = {};
+      try { vars = JSON.parse($('persona-vars').value || '{}') || {}; }
+      catch (e) { toast('Prompt variables must be valid JSON', 'err'); return; }
+      vars.lead_name = vars.lead_name || 'Rahul';
+      vars.lead_phone = vars.lead_phone || '+919876543210';
+      vars.business_name = vars.business_name || $('persona-name').value || 'our company';
+      vars.agent_name = vars.agent_name || $('persona-agent-name').value || 'agent';
+      vars.tools = vars.tools || 'check_availability, book_appointment, hangup';
+      const out = tmpl.replace(/\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/g, (m, k) => vars[k] != null ? vars[k] : m);
+      $('persona-vars-hint').textContent = 'Preview: ' + out.slice(0, 120) + (out.length > 120 ? '…' : '');
+    };
+
     async function savePersonaForm() {
       const id = $('persona-edit-id').value;
+      let promptVars = {};
+      if ($('persona-vars').value && $('persona-vars').value.trim()) {
+        try { promptVars = JSON.parse($('persona-vars').value); }
+        catch (e) { toast('Prompt variables must be valid JSON', 'err'); return; }
+      }
       const body = {
         name: $('persona-name').value.trim(),
         agent_name: $('persona-agent-name').value.trim(),
@@ -3520,6 +3673,7 @@
         model: 'gemini-3.1-flash-live-preview',
         audio_mode: $('persona-audio').value,
         system_prompt: $('persona-prompt').value,
+        prompt_vars: promptVars,
         source: (id && ((_personaState.personas || []).find(p => p.id === id) || {}).source) || 'manual',
         source_ref: (id && ((_personaState.personas || []).find(p => p.id === id) || {}).source_ref) || '',
       };

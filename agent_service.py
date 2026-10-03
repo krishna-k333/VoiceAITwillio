@@ -63,6 +63,11 @@ AGENT_TOOLS = [
         "when": "After book_appointment succeeds, when Google OAuth is configured.",
     },
     {
+        "name": "http_request",
+        "description": "Calls a user-configured HTTP/API integration tool by name. The configured tools are listed in the prompt's {{tools}} section.",
+        "when": "When the caller needs something handled by a custom API integration you have configured.",
+    },
+    {
         "name": "remember_details",
         "description": "Stores a useful fact about this caller for the next call.",
         "when": "Whenever they mention a preference, objection, or callback time.",
@@ -148,6 +153,7 @@ def _save_built(built: dict, audio_mode: str, voice: str) -> dict:
         system_prompt=built.get("system_prompt") or "",
         source=built.get("source") or "manual",
         source_ref=built.get("source_ref") or "",
+        prompt_vars=built.get("prompt_vars") or None,
     )
 
 
@@ -168,6 +174,7 @@ def create_from_prompt(
     voice: str = "Sulafat",
     audio_mode: str = "gemini",
     enabled_tools=None,
+    prompt_vars: Optional[dict] = None,
 ) -> dict:
     """Save a persona whose prompt was written by hand."""
     if not (name or "").strip():
@@ -183,6 +190,7 @@ def create_from_prompt(
         system_prompt=system_prompt,
         enabled_tools=_tools_field(enabled_tools),
         source="manual",
+        prompt_vars=prompt_vars,
     )
 
 

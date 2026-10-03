@@ -86,3 +86,17 @@ CREATE TABLE IF NOT EXISTS agent_profiles (
     created_at TEXT NOT NULL
 );
 ALTER TABLE agent_profiles DISABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS http_tools (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL,
+    method TEXT NOT NULL DEFAULT 'GET',
+    headers_json TEXT NOT NULL DEFAULT '{}',
+    body_template TEXT NOT NULL DEFAULT '',
+    timeout INTEGER DEFAULT 10,
+    enabled BOOLEAN DEFAULT TRUE,
+    created_at TEXT NOT NULL
+);
+ALTER TABLE http_tools DISABLE ROW LEVEL SECURITY;

@@ -47,6 +47,7 @@ def init_local_db() -> None:
                 source TEXT NOT NULL DEFAULT 'manual',
                 source_ref TEXT NOT NULL DEFAULT '',
                 email_theme TEXT NOT NULL DEFAULT '{}',
+                prompt_vars TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -62,21 +63,33 @@ def init_local_db() -> None:
             conn.execute("SELECT email_theme FROM personas LIMIT 1")
         except Exception:
             conn.execute("ALTER TABLE personas ADD COLUMN email_theme TEXT NOT NULL DEFAULT '{}'")
+        # Add prompt_vars column to existing databases that don't have it
+        try:
+            conn.execute("SELECT prompt_vars FROM personas LIMIT 1")
+        except Exception:
+            conn.execute("ALTER TABLE personas ADD COLUMN prompt_vars TEXT NOT NULL DEFAULT '{}'")
     print(f"Local persona database ready at {db_path()}")
 
 
 def _row(row: Optional[sqlite3.Row]) -> Optional[dict]:
+    import json as _json
     if not row:
         return None
     d = dict(row)
     # Parse email_theme from JSON string to dict
     if "email_theme" in d and isinstance(d["email_theme"], str):
         try:
-            import json as _json
             parsed = _json.loads(d["email_theme"])
             d["email_theme"] = parsed if isinstance(parsed, dict) else {}
         except Exception:
             d["email_theme"] = {}
+    # Parse prompt_vars from JSON string to dict
+    if "prompt_vars" in d and isinstance(d["prompt_vars"], str):
+        try:
+            parsed = _json.loads(d["prompt_vars"])
+            d["prompt_vars"] = parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            d["prompt_vars"] = {}
     return d
 
 
@@ -109,6 +122,7 @@ def save_persona(
     source: str = "manual",
     source_ref: str = "",
     email_theme: Optional[str] = None,
+    prompt_vars: Optional[dict] = None,
     persona_id: Optional[str] = None,
 ) -> dict:
     import json as _json
@@ -117,6 +131,11 @@ def save_persona(
     if audio_mode not in ("gemini", "deepgram"):
         audio_mode = "gemini"
     now = datetime.now().isoformat(timespec="seconds")
+
+    # Serialize prompt_vars for storage
+    if prompt_vars is None:
+        prompt_vars = {}
+    prompt_vars_json = _json.dumps(prompt_vars)
 
     # Assign theme if not provided
     if not email_theme or email_theme == "{}":
@@ -142,13 +161,14 @@ def save_persona(
                 UPDATE personas
                    SET name = ?, agent_name = ?, direction = ?, voice = ?, model = ?,
                        audio_mode = ?, system_prompt = ?, enabled_tools = ?,
-                       source = ?, source_ref = ?, email_theme = ?, updated_at = ?
+                       source = ?, source_ref = ?, email_theme = ?, prompt_vars = ?, updated_at = ?
                  WHERE id = ?
                 """,
                 (
                     name.strip(), agent_name.strip(), direction, voice.strip() or "Sulafat",
                     model.strip() or "gemini-3.1-flash-live-preview", audio_mode, system_prompt or "",
-                    enabled_tools or "[]", source or "manual", source_ref or "", email_theme, now, persona_id,
+                    enabled_tools or "[]", source or "manual", source_ref or "", email_theme,
+                    prompt_vars_json, now, persona_id,
                 ),
             )
         else:
@@ -158,14 +178,15 @@ def save_persona(
                 INSERT INTO personas (
                     id, name, agent_name, direction, voice, model, audio_mode,
                     system_prompt, enabled_tools, source, source_ref, email_theme,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    prompt_vars, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     persona_id, name.strip(), agent_name.strip(), direction,
                     voice.strip() or "Sulafat", model.strip() or "gemini-3.1-flash-live-preview",
                     audio_mode, system_prompt or "", enabled_tools or "[]",
-                    source or "manual", source_ref or "", email_theme, now, now,
+                    source or "manual", source_ref or "", email_theme,
+                    prompt_vars_json, now, now,
                 ),
             )
     persona = get_persona(persona_id)
@@ -252,4 +273,6 @@ def call_fields(persona: Optional[dict]) -> dict:
         fields["tools_override"] = persona["enabled_tools"]
     if persona.get("agent_name"):
         fields["agent_name"] = persona["agent_name"]
+    if persona.get("prompt_vars"):
+        fields["prompt_vars"] = persona["prompt_vars"]
     return fields

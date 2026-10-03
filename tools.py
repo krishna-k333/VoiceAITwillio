@@ -11,6 +11,7 @@ from db import (
     check_slot, get_next_available, insert_appointment, log_call, log_error,
     get_calls_by_phone, get_appointments_by_phone,
     add_contact_memory, get_contact_memory, compress_contact_memory,
+    get_http_tools,
 )
 
 logger = logging.getLogger("appointment-tools")
@@ -21,6 +22,16 @@ async def _log(msg: str, detail: str = "", level: str = "info") -> None:
         await log_error("agent", msg, detail, level)
     except Exception:
         pass
+
+
+def _substitute(text: str, values: dict) -> str:
+    """Replace {{key}} placeholders in a string with values from a dict."""
+    import re as _re
+    pattern = _re.compile(r"\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}")
+    def _repl(m: _re.Match) -> str:
+        key = m.group(1)
+        return str(values[key]) if key in values and values[key] is not None else m.group(0)
+    return pattern.sub(_repl, text)
 
 
 class AppointmentTools(llm.ToolContext):
@@ -45,14 +56,23 @@ class AppointmentTools(llm.ToolContext):
         self._call_logged = False  # set True when end_call() fires so agent.py won't double-log
         self._booking_completed = False
         self._last_booking_summary = ""
+        self.http_tools: list = []  # user-configured HTTP request tools
         super().__init__(tools=[])
+
+    async def load_http_tools(self) -> None:
+        """Load enabled user-defined HTTP request tools from the database."""
+        try:
+            self.http_tools = await get_http_tools(enabled_only=True)
+        except Exception as exc:
+            logger.warning("Could not load HTTP tools: %s", exc)
+            self.http_tools = []
 
     def build_tool_list(self, enabled: list) -> list:
         """Return tool methods filtered by the enabled list. Empty list = all enabled."""
         all_methods = [
             self.check_availability, self.book_appointment, self.end_call, self.hangup,
             self.transfer_to_human, self.send_sms_confirmation, self.send_email,
-            self.create_google_calendar_event,
+            self.create_google_calendar_event, self.http_request,
             self.lookup_contact, self.remember_details, self.book_calcom, self.cancel_calcom,
         ]
         if not enabled:
@@ -287,6 +307,51 @@ class AppointmentTools(llm.ToolContext):
         except Exception as exc:
             logger.warning("Google Calendar creation failed: %s", exc)
             return "Calendar event creation failed, but the appointment is booked."
+
+    @llm.function_tool
+    async def http_request(self, tool_name: str, params: str = "{}") -> str:
+        """
+        Call a user-configured HTTP integration tool (URL/API endpoint) by name.
+        tool_name: the name of the configured HTTP tool (e.g. "lookup_customer", "book_slot")
+        params: JSON object of field values to substitute into the tool's URL/body (optional)
+        Only call tools listed in your instructions. Returns the API response or an error.
+        """
+        tool = next((t for t in self.http_tools if t.get("name") == tool_name), None)
+        if not tool:
+            available = ", ".join(t.get("name", "?") for t in self.http_tools) or "none"
+            return f"HTTP tool '{tool_name}' not found. Available: {available}"
+        import json as _json
+        try:
+            params_dict = _json.loads(params or "{}") if isinstance(params, str) else (params or {})
+        except Exception:
+            params_dict = {}
+        url = tool.get("url", "")
+        method = (tool.get("method") or "GET").upper()
+        headers_raw = tool.get("headers_json") or "{}"
+        try:
+            headers = _json.loads(headers_raw) if isinstance(headers_raw, str) else headers_raw
+        except Exception:
+            headers = {}
+        body_template = tool.get("body_template") or ""
+        timeout = int(tool.get("timeout") or 10)
+
+        # Substitute {{field}} placeholders in URL and body with param values
+        url = _substitute(url, params_dict)
+        body_text = _substitute(body_template, params_dict) if body_template else None
+
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                if method in ("POST", "PUT", "PATCH"):
+                    resp = await client.request(method, url, headers=headers,
+                                                json=_json.loads(body_text) if body_text else None)
+                else:
+                    resp = await client.request(method, url, headers=headers, params=params_dict)
+                if resp.status_code >= 400:
+                    return f"{tool_name} returned HTTP {resp.status_code}: {resp.text[:300]}"
+                return resp.text[:800]
+        except Exception as exc:
+            return f"{tool_name} failed: {exc}"
 
     @llm.function_tool
     async def lookup_contact(self, phone: str) -> str:

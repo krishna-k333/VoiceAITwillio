@@ -42,6 +42,7 @@ from db import (
     delete_agent_profile, set_default_agent_profile, get_billing_summary, get_calls_by_phone,
     get_campaign, get_contacts, get_errors, get_logs, get_setting, get_stats, init_db, log_error,
     save_settings, set_setting, update_call_notes, update_campaign_run_stats, update_campaign_status,
+    get_http_tools, create_http_tool, update_http_tool, delete_http_tool,
 )
 from prompts import DEFAULT_SYSTEM_PROMPT
 from local_store import (
@@ -405,32 +406,65 @@ async def api_cancel_appointment(appointment_id: str):
 
 # ── Prompt ────────────────────────────────────────────────────────────────────
 
-@app.get("/api/prompt")
-async def api_get_prompt():
-    saved = get_local_setting("system_prompt", "")
-    if not saved:
-        saved = await get_setting("system_prompt", "")
-    return {"prompt": saved or DEFAULT_SYSTEM_PROMPT, "is_custom": bool(saved)}
+class HttpToolRequest(BaseModel):
+    name: str
+    description: str = ""
+    url: str
+    method: str = "GET"
+    headers: Optional[dict] = None
+    body_template: str = ""
+    timeout: int = 10
+    enabled: bool = True
 
 
-@app.post("/api/prompt")
-async def api_save_prompt(req: PromptRequest):
-    set_local_setting("system_prompt", req.prompt)
-    try:
-        await set_setting("system_prompt", req.prompt)
-    except Exception:
-        pass
-    return {"status": "saved"}
+@app.get("/api/dynamic-prompts")
+async def api_get_dynamic_prompts():
+    """Return the default prompt template + all dynamic template variables for the editor."""
+    from prompts import DEFAULT_PROMPT_TEMPLATE, DEFAULT_PROMPT_VARS
+    return {
+        "default_template": DEFAULT_PROMPT_TEMPLATE,
+        "default_vars": DEFAULT_PROMPT_VARS,
+        "variable_keys": sorted(DEFAULT_PROMPT_VARS.keys()),
+    }
 
 
-@app.delete("/api/prompt")
-async def api_reset_prompt():
-    set_local_setting("system_prompt", "")
-    try:
-        await set_setting("system_prompt", "")
-    except Exception:
-        pass
-    return {"status": "reset", "prompt": DEFAULT_SYSTEM_PROMPT}
+# ── HTTP Request Tools ───────────────────────────────────────────────────────
+
+@app.get("/api/http-tools")
+async def api_list_http_tools():
+    return await get_http_tools()
+
+
+@app.post("/api/http-tools")
+async def api_create_http_tool(req: HttpToolRequest):
+    if not req.name.strip() or not req.url.strip():
+        raise HTTPException(400, "name and url are required")
+    tool_id = await create_http_tool(
+        name=req.name, description=req.description, url=req.url,
+        method=req.method, headers=req.headers, body_template=req.body_template,
+        timeout=req.timeout, enabled=req.enabled,
+    )
+    return {"status": "created", "id": tool_id}
+
+
+@app.put("/api/http-tools/{tool_id}")
+async def api_update_http_tool(tool_id: str, req: HttpToolRequest):
+    ok = await update_http_tool(
+        tool_id=tool_id, name=req.name, description=req.description, url=req.url,
+        method=req.method, headers=req.headers, body_template=req.body_template,
+        timeout=req.timeout, enabled=req.enabled,
+    )
+    if not ok:
+        raise HTTPException(404, "Tool not found")
+    return {"status": "updated"}
+
+
+@app.delete("/api/http-tools/{tool_id}")
+async def api_delete_http_tool(tool_id: str):
+    ok = await delete_http_tool(tool_id)
+    if not ok:
+        raise HTTPException(404, "Tool not found")
+    return {"status": "deleted"}
 
 
 class PersonaRequest(BaseModel):
@@ -444,6 +478,7 @@ class PersonaRequest(BaseModel):
     enabled_tools: str = "[]"
     source: str = "manual"
     source_ref: str = ""
+    prompt_vars: Optional[dict] = None
 
 
 class PersonaUseRequest(BaseModel):
@@ -482,7 +517,7 @@ async def api_create_persona(req: PersonaRequest):
         name=req.name, agent_name=req.agent_name, direction=req.direction,
         voice=req.voice, model=req.model, audio_mode=req.audio_mode,
         system_prompt=req.system_prompt, enabled_tools=req.enabled_tools,
-        source=req.source, source_ref=req.source_ref,
+        source=req.source, source_ref=req.source_ref, prompt_vars=req.prompt_vars,
     )
     return persona
 
@@ -497,6 +532,7 @@ async def api_update_persona(persona_id: str, req: PersonaRequest):
             direction=req.direction, voice=req.voice, model=req.model,
             audio_mode=req.audio_mode, system_prompt=req.system_prompt,
             enabled_tools=req.enabled_tools, source=req.source, source_ref=req.source_ref,
+            prompt_vars=req.prompt_vars,
         )
     except KeyError:
         raise HTTPException(404, "Persona not found")
