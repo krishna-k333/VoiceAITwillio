@@ -711,15 +711,21 @@ async def compress_contact_memory(phone: str, compressed: str) -> None:
 # ── Agent Profiles ────────────────────────────────────────────────────────────
 
 async def get_all_agent_profiles() -> list:
-    db = await _adb()
-    result = await db.table("agent_profiles").select("*").order("created_at").execute()
-    return result.data or []
+    try:
+        db = await _adb()
+        result = await db.table("agent_profiles").select("*").order("created_at").execute()
+        return result.data or []
+    except Exception:
+        return []
 
 
 async def get_agent_profile(profile_id: str) -> Optional[dict]:
-    db = await _adb()
-    result = await db.table("agent_profiles").select("*").eq("id", profile_id).maybe_single().execute()
-    return result.data if result else None
+    try:
+        db = await _adb()
+        result = await db.table("agent_profiles").select("*").eq("id", profile_id).maybe_single().execute()
+        return result.data if result else None
+    except Exception:
+        return None
 
 
 async def create_agent_profile(
