@@ -27,6 +27,7 @@ async def handle_vobiz_websocket(websocket: WebSocket):
     call_id: Optional[str] = None
     caller_phone: str = "unknown"
     agent_task: Optional[asyncio.Task] = None
+    media_count = 0
 
     livekit_url = os.getenv("LIVEKIT_URL", "")
     api_key = os.getenv("LIVEKIT_API_KEY", "")
@@ -34,8 +35,15 @@ async def handle_vobiz_websocket(websocket: WebSocket):
 
     async def stream_agent_audio(remote_track: rtc.RemoteAudioTrack):
         try:
-            audio_stream = rtc.AudioStream(remote_track)
-            logger.info("Started streaming agent audio to Vobiz")
+            # Resample to 16kHz mono 20ms frames matching Vobiz requirement
+            audio_stream = rtc.AudioStream(
+                remote_track,
+                sample_rate=16000,
+                num_channels=1,
+                frame_size_ms=20,
+            )
+            logger.info("Started streaming agent audio to Vobiz (16kHz mono 20ms)")
+            frames_sent = 0
             async for frame in audio_stream:
                 if not stream_id:
                     continue
@@ -45,11 +53,14 @@ async def handle_vobiz_websocket(websocket: WebSocket):
                     "streamId": stream_id,
                     "media": {
                         "contentType": "audio/x-l16",
-                        "sampleRate": frame.sample_rate,
+                        "sampleRate": 16000,
                         "payload": payload,
                     },
                 }
                 await websocket.send_text(json.dumps(msg))
+                frames_sent += 1
+                if frames_sent == 1 or frames_sent % 100 == 0:
+                    logger.info(f"Sent {frames_sent} audio frames to Vobiz")
         except Exception as exc:
             logger.warning(f"Agent audio stream ended: {exc}")
 
@@ -61,10 +72,15 @@ async def handle_vobiz_websocket(websocket: WebSocket):
 
             if event == "start":
                 start_info = data.get("start", {})
-                stream_id = start_info.get("streamId")
-                call_id = start_info.get("callId", str(uuid.uuid4())[:8])
-                caller_phone = start_info.get("from") or start_info.get("caller") or "inbound_caller"
-                logger.info(f"Vobiz stream started — streamId={stream_id} callId={call_id} from={caller_phone}")
+                stream_id = data.get("streamId") or start_info.get("streamId")
+                call_id = data.get("callId") or start_info.get("callId") or str(uuid.uuid4())[:8]
+                caller_phone = (
+                    data.get("from")
+                    or start_info.get("from")
+                    or start_info.get("caller")
+                    or "inbound_caller"
+                )
+                logger.info(f"Vobiz stream started — streamId={stream_id} callId={call_id} from={caller_phone} payload={data}")
 
                 room_name = f"inbound-{call_id}"
 
@@ -104,12 +120,21 @@ async def handle_vobiz_websocket(websocket: WebSocket):
                 @room.on("track_subscribed")
                 def on_track_subscribed(track, publication, participant):
                     if track.kind == rtc.TrackKind.KIND_AUDIO:
-                        logger.info(f"Agent audio track detected from {participant.identity}")
+                        logger.info(f"Agent audio track subscribed from {participant.identity}")
                         nonlocal agent_task
-                        agent_task = asyncio.create_task(stream_agent_audio(track))
+                        if not agent_task or agent_task.done():
+                            agent_task = asyncio.create_task(stream_agent_audio(track))
 
                 await room.connect(livekit_url, token)
                 logger.info(f"Connected to LiveKit room {room_name}")
+
+                # Check if agent already published track
+                for p in room.remote_participants.values():
+                    for pub in p.track_publications.values():
+                        if pub.track and pub.track.kind == rtc.TrackKind.KIND_AUDIO:
+                            if not agent_task or agent_task.done():
+                                logger.info(f"Found existing agent audio track from {p.identity}")
+                                agent_task = asyncio.create_task(stream_agent_audio(pub.track))
 
                 # 4. Create and publish audio track for caller
                 source = rtc.AudioSource(16000, 1)
@@ -130,10 +155,15 @@ async def handle_vobiz_websocket(websocket: WebSocket):
                         samples_per_channel=samples,
                     )
                     await source.capture_frame(frame)
+                    media_count += 1
+                    if media_count == 1 or media_count % 100 == 0:
+                        logger.info(f"Received {media_count} caller audio frames from Vobiz")
 
             elif event == "stop":
                 logger.info(f"Vobiz stream stopped for {call_id}")
                 break
+            else:
+                logger.info(f"Vobiz event: {event} — {data}")
 
     except WebSocketDisconnect:
         logger.info("Vobiz WebSocket disconnected")

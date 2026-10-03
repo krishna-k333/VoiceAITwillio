@@ -516,7 +516,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # registration — the disconnect event already fired and we'd otherwise
     # wait out the full 1-hour timeout. If no SIP participant is present, mark
     # the disconnect now so the wait below returns immediately and logs.
-    if phone_number:
+    if phone_number and not is_inbound:
         _sip_present = any(
             p.identity == _sip_identity or p.identity.startswith("sip_")
             for p in ctx.room.remote_participants.values()
