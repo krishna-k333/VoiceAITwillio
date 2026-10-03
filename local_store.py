@@ -40,7 +40,7 @@ def init_local_db() -> None:
                 agent_name TEXT NOT NULL DEFAULT '',
                 direction TEXT NOT NULL DEFAULT 'both',
                 voice TEXT NOT NULL DEFAULT 'Sulafat',
-                model TEXT NOT NULL DEFAULT 'gemini-3.8-live',
+                model TEXT NOT NULL DEFAULT 'gemini-3.1-flash-live-preview',
                 audio_mode TEXT NOT NULL DEFAULT 'gemini',
                 system_prompt TEXT NOT NULL DEFAULT '',
                 enabled_tools TEXT NOT NULL DEFAULT '[]',
@@ -86,7 +86,7 @@ def save_persona(
     agent_name: str = "",
     direction: str = "both",
     voice: str = "Sulafat",
-    model: str = "gemini-3.8-live",
+    model: str = "gemini-3.1-flash-live-preview",
     audio_mode: str = "gemini",
     system_prompt: str = "",
     enabled_tools: str = "[]",
@@ -116,7 +116,7 @@ def save_persona(
                 """,
                 (
                     name.strip(), agent_name.strip(), direction, voice.strip() or "Sulafat",
-                    model.strip() or "gemini-3.8-live", audio_mode, system_prompt or "",
+                    model.strip() or "gemini-3.1-flash-live-preview", audio_mode, system_prompt or "",
                     enabled_tools or "[]", source or "manual", source_ref or "", now, persona_id,
                 ),
             )
@@ -131,7 +131,7 @@ def save_persona(
                 """,
                 (
                     persona_id, name.strip(), agent_name.strip(), direction,
-                    voice.strip() or "Sulafat", model.strip() or "gemini-3.8-live",
+                    voice.strip() or "Sulafat", model.strip() or "gemini-3.1-flash-live-preview",
                     audio_mode, system_prompt or "", enabled_tools or "[]",
                     source or "manual", source_ref or "", now, now,
                 ),

@@ -6,6 +6,7 @@ comes back empty, fall back to the Google Maps place.
 """
 
 import asyncio
+import logging
 import os
 import re
 import time
@@ -13,6 +14,8 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
+
+logger = logging.getLogger("persona-builder")
 
 WEBSITE_ACTOR = "apify~website-content-crawler"
 MAPS_ACTOR = "compass~crawler-google-places"
@@ -41,11 +44,11 @@ def _as_website(target: str) -> Optional[str]:
     return text
 
 
-async def _run_actor(actor: str, payload: dict, timeout_s: int = 110, memory: int = 4096) -> list:
+async def _run_actor(actor: str, payload: dict, timeout_s: int = 150, memory: int = 4096) -> list:
     token = apify_token()
     if not token:
         raise RuntimeError("APIFY_TOKEN is not set. Add it to .env and restart the server.")
-    async with httpx.AsyncClient(timeout=40) as client:
+    async with httpx.AsyncClient(timeout=60) as client:
         started = await client.post(
             f"https://api.apify.com/v2/acts/{actor}/runs",
             params={"token": token, "memory": memory, "timeout": timeout_s},
@@ -58,6 +61,7 @@ async def _run_actor(actor: str, payload: dict, timeout_s: int = 110, memory: in
         run_id = run["id"]
         dataset_id = run.get("defaultDatasetId")
         status = run.get("status")
+        logger.info("Apify %s started — run_id=%s", actor, run_id)
         # waitForFinish on Apify caps at 60s, so poll instead.
         deadline = time.time() + timeout_s
         while status not in ("SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT") and time.time() < deadline:
@@ -72,12 +76,15 @@ async def _run_actor(actor: str, payload: dict, timeout_s: int = 110, memory: in
             dataset_id = body.get("defaultDatasetId") or dataset_id
         if status != "SUCCEEDED":
             raise RuntimeError(f"Apify {actor} finished as {status or 'timeout'}")
+        if not dataset_id:
+            raise RuntimeError(f"Apify {actor} succeeded but returned no dataset ID — cannot fetch results")
         items = await client.get(
             f"https://api.apify.com/v2/datasets/{dataset_id}/items",
             params={"token": token, "clean": "true", "limit": 12},
         )
         items.raise_for_status()
         data = items.json()
+        logger.info("Apify %s returned %d items", actor, len(data) if isinstance(data, list) else 0)
         return data if isinstance(data, list) else []
 
 
@@ -92,10 +99,10 @@ def _website_text(items: list) -> tuple[str, str]:
         if len(body) < 40:
             continue
         url = item.get("url") or ""
-        chunks.append(f"PAGE: {page or url}\n{body[:3500]}")
-        if sum(len(c) for c in chunks) > 14000:
+        chunks.append(f"PAGE: {page or url}\n{body[:5000]}")
+        if sum(len(c) for c in chunks) > 18000:
             break
-    return title, "\n\n".join(chunks)[:14000]
+    return title, "\n\n".join(chunks)[:18000]
 
 
 def _maps_text(items: list) -> tuple[str, str]:
@@ -135,6 +142,7 @@ async def _scrape(target: str) -> tuple[str, str, str]:
     """Return (source, title, text). source is 'website' or 'gmaps'."""
     website = _as_website(target)
     if website and not _is_maps(target):
+        logger.info("Scraping website: %s", website)
         items = await _run_actor(
             WEBSITE_ACTOR,
             {
@@ -147,26 +155,30 @@ async def _scrape(target: str) -> tuple[str, str, str]:
                 "maxConcurrency": 2,
                 "proxyConfiguration": {"useApifyProxy": True},
             },
-            timeout_s=150,
+            timeout_s=180,
             memory=4096,
         )
         title, text = _website_text(items)
+        logger.info("Website scrape returned %d chars (title=%s)", len(text), title)
         if len(text) >= 200:
             return "website", title or urlparse(website).netloc, text
-        # Site was empty or blocked. Search Maps with the domain name.
+        logger.info("Website content too short (%d chars) — falling back to Google Maps", len(text))
         query = urlparse(website).netloc.replace("www.", "")
     else:
         query = target.strip()
 
+    logger.info("Scraping Google Maps: %s", query)
     payload: dict = {"maxCrawledPlacesPerSearch": 1, "language": "en", "maxReviews": 5}
     if _is_maps(target):
         payload["startUrls"] = [{"url": target.strip()}]
     else:
         payload["searchStringsArray"] = [query]
-    items = await _run_actor(MAPS_ACTOR, payload, timeout_s=90, memory=4096)
+    items = await _run_actor(MAPS_ACTOR, payload, timeout_s=120, memory=4096)
     title, text = _maps_text(items)
+    logger.info("Google Maps scrape returned %d chars (title=%s)", len(text), title)
     if not text:
-        raise RuntimeError("Nothing useful came back from the website or Google Maps.")
+        raise RuntimeError(f"Nothing useful came back from the website or Google Maps for '{target}'. "
+                           "Check that the URL is accessible and the business is listed on Google Maps.")
     return "gmaps", title or query, text
 
 
@@ -179,11 +191,11 @@ def _spoken_lines(text: str) -> int:
 def _prompt_is_thin(text: str) -> bool:
     """A usable phone prompt has a real script, not a short summary."""
     body = (text or "").strip()
-    if len(body) < 1600:
+    if len(body) < 800:
         return True
-    if "end_call" not in body:
+    if "end_call" not in body and "end the call" not in body.lower():
         return True
-    return _spoken_lines(body) < 6
+    return _spoken_lines(body) < 3
 
 
 def _fallback_prompt(title: str, direction: str, source_text: str) -> str:
@@ -198,8 +210,9 @@ def _fallback_prompt(title: str, direction: str, source_text: str) -> str:
     )
     if side == "inbound":
         first = (
-            "THIS CALL IS INBOUND. They called you. Do not greet. "
-            f"The first sentence you speak is exactly: {inbound_open}"
+            "THIS CALL IS INBOUND. They called you and are waiting. "
+            f"The first sentence you speak, out loud, is exactly: {inbound_open} "
+            "Do not stay silent. Do not start with hi, hello, or good morning."
         )
     elif side == "outbound":
         first = (
@@ -302,7 +315,7 @@ Direction: {side}.
 Return only the prompt. No preface.
 {rewrite}
 This is the script the agent speaks from, not a summary of the website. A short paragraph is a failure.
-Length: at least 900 words. Include at least 10 lines the agent can say out loud, each inside double quotes.
+Length: at least 600 words. Include at least 6 lines the agent can say out loud, each inside double quotes.
 
 The agent must know, without guessing:
 - the exact first sentence, in quotes
@@ -318,7 +331,7 @@ Rules:
 - Spoken turns are one or two short sentences. Put those lines in double quotes. Do not put stage directions inside the quotes.
 - Do not open with hi, hello, good morning, or "am I speaking with".
 - Outbound: the agent placed the call and speaks first, saying why it is calling.
-- Inbound: the agent asks what the caller needs, in one sentence, with no greeting.
+- Inbound: the caller is already waiting. The first quoted sentence says who is answering and asks what they need. Do not start with hi, hello, or good morning, and do not stay silent.
 - If direction is both, write both openings and label them OUTBOUND FIRST LINE and INBOUND FIRST LINE.
 - Indian or Hindi source: the quoted lines are natural Hinglish. Any other source: the quoted lines are in that language. Headings stay in English.
 - Section headings the agent does not read aloud: WHO YOU ARE, FIRST LINE, CALL FLOW, OBJECTIONS, BOOKING, STYLE, TOOLS, KNOWLEDGE.
@@ -346,11 +359,12 @@ def _candidate_text(data: dict) -> tuple[str, str]:
 async def _generate_script(instruction: str) -> str:
     api_key = os.getenv("GOOGLE_API_KEY", "").strip()
     if not api_key:
+        logger.error("GOOGLE_API_KEY is not set — cannot generate persona script")
         return ""
     best = ""
-    async with httpx.AsyncClient(timeout=90) as client:
+    async with httpx.AsyncClient(timeout=120) as client:
         for model in ("gemini-2.5-flash", "gemini-2.0-flash"):
-            config: dict = {"temperature": 0.5, "maxOutputTokens": 8192}
+            config: dict = {"temperature": 0.5, "maxOutputTokens": 16384}
             # 2.5 Flash spends the output budget on hidden thinking unless this is 0,
             # which was cutting the spoken script down to a short summary.
             if model.startswith("gemini-2.5"):
@@ -364,33 +378,43 @@ async def _generate_script(instruction: str) -> str:
                         "generationConfig": config,
                     },
                 )
-            except httpx.HTTPError:
+            except httpx.HTTPError as exc:
+                logger.warning("Gemini %s request failed: %s", model, exc)
                 continue
             if resp.status_code >= 400:
+                logger.warning("Gemini %s returned HTTP %d: %s", model, resp.status_code, resp.text[:300])
                 continue
             text, finish = _candidate_text(resp.json())
+            logger.info("Gemini %s returned %d chars (finish=%s)", model, len(text), finish)
             if len(text) > len(best):
                 best = text
             if text and not _prompt_is_thin(text) and finish != "MAX_TOKENS":
                 return text
+    if not best:
+        logger.warning("Both Gemini models returned empty responses")
+    else:
+        logger.warning("Best Gemini response was %d chars but failed thin check", len(best))
     return best
 
 
 async def _write_prompt(title: str, direction: str, source_text: str) -> str:
     instruction = _script_instruction(title, direction, source_text)
+    logger.info("Generating persona prompt for %s (direction=%s, source_chars=%d)", title, direction, len(source_text))
     draft = await _generate_script(instruction)
     if draft and not _prompt_is_thin(draft):
+        logger.info("Prompt generated on first attempt (%d chars)", len(draft))
         return draft
     if draft:
+        logger.info("First draft was thin (%d chars) — retrying with draft context", len(draft))
         expanded = await _generate_script(_script_instruction(title, direction, source_text, draft))
         if expanded and not _prompt_is_thin(expanded):
+            logger.info("Expanded prompt generated (%d chars)", len(expanded))
             return expanded
         if len(expanded) > len(draft):
             draft = expanded
     fallback = _fallback_prompt(title, direction, source_text)
-    if _prompt_is_thin(draft):
-        return fallback
-    return draft or fallback
+    logger.info("Using fallback prompt (%d chars) — best Gemini response was %d chars", len(fallback), len(draft))
+    return fallback if _prompt_is_thin(draft) else (draft or fallback)
 
 
 def _agent_name(title: str) -> str:
@@ -407,7 +431,9 @@ async def build_from_brief(brief: str, direction: str = "both", name: str = "") 
         raise RuntimeError("Describe the agent you want.")
     direction = direction if direction in ("inbound", "outbound", "both") else "both"
     title = (name or "").strip() or re.sub(r"\s+", " ", brief).strip()[:80]
+    logger.info("Building persona from brief: %s (direction=%s)", title[:80], direction)
     prompt = await _write_prompt(title, direction, brief)
+    logger.info("Persona built from brief — name=%s prompt=%d chars", title, len(prompt))
     return {
         "name": title,
         "agent_name": _agent_name(name or title),
@@ -416,7 +442,7 @@ async def build_from_brief(brief: str, direction: str = "both", name: str = "") 
         "source": "ai",
         "source_ref": brief[:500],
         "voice": os.getenv("GEMINI_TTS_VOICE", "Sulafat") or "Sulafat",
-        "model": "gemini-3.8-live",
+        "model": "gemini-3.1-flash-live-preview",
         "audio_mode": "gemini",
     }
 
@@ -426,8 +452,10 @@ async def build_from_target(target: str, direction: str = "both") -> dict:
     target = (target or "").strip()
     if not target:
         raise RuntimeError("Paste a website, a Google Maps link, or a business name.")
+    logger.info("Building persona from target: %s (direction=%s)", target[:80], direction)
     source, title, text = await _scrape(target)
     prompt = await _write_prompt(title, direction, text)
+    logger.info("Persona built from %s — name=%s prompt=%d chars", source, title, len(prompt))
     return {
         "name": title or target[:80],
         "agent_name": _agent_name(title),
@@ -436,6 +464,6 @@ async def build_from_target(target: str, direction: str = "both") -> dict:
         "source": source,
         "source_ref": target,
         "voice": os.getenv("GEMINI_TTS_VOICE", "Sulafat") or "Sulafat",
-        "model": "gemini-3.8-live",
+        "model": "gemini-3.1-flash-live-preview",
         "audio_mode": "gemini",
     }

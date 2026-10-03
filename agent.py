@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import ssl
 import sys
 import time
@@ -44,6 +45,209 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("outbound-agent")
 
 SIP_DOMAIN = os.getenv("VOBIZ_SIP_DOMAIN", "")
+# Official Gemini Live id. gemini-3.8-live is not used for calls.
+LIVE_MODEL = "gemini-3.1-flash-live-preview"
+
+
+def _live_model(model: Optional[str]) -> str:
+    value = (model or os.getenv("GEMINI_MODEL") or LIVE_MODEL).strip()
+    if not value or "3.8" in value:
+        return LIVE_MODEL
+    return value
+
+# A quoted line the agent may say. The first quote in a whole prompt is often an
+# example ("Ji haan, aapka appointment book ho jayega"), not the opener.
+_SPOKEN_QUOTE = re.compile(r'"([^"\n]{12,180})"|“([^”\n]{12,180})”')
+_SECTION_END = re.compile(
+    r"\n(?:#{1,3} |STEP\s+\d+\b|[A-Z][A-Z0-9][A-Z0-9 /&\-]{5,}\s*$)",
+    re.MULTILINE,
+)
+
+
+def _spoken_quotes(text: str) -> list[str]:
+    found = []
+    for match in _SPOKEN_QUOTE.finditer(text or ""):
+        line = (match.group(1) or match.group(2) or "").strip()
+        if line:
+            found.append(line)
+    return found
+
+
+def _section_body(text: str, label: str) -> str:
+    match = re.search(re.escape(label), text or "", flags=re.IGNORECASE)
+    if not match:
+        return ""
+    rest = text[match.end():]
+    stop = _SECTION_END.search(rest)
+    body = rest[: stop.start()] if stop else rest[:1200]
+    return body[:1200]
+
+
+def _fallback_inbound_opening(agent_name: str, business_name: str) -> str:
+    agent = (agent_name or "").strip()
+    business = (business_name or "").strip()
+    if business.lower() in {"", "our company", "the business"}:
+        business = ""
+    if agent.lower() in {"", "the receptionist"}:
+        agent = ""
+    if business and agent:
+        return f"Ji, {business} se {agent} is taraf se. Bataiye, kis cheez mein madad chahiye?"
+    if business:
+        return f"Ji, {business} se bol rahe hain. Bataiye, kis cheez mein madad chahiye?"
+    if agent:
+        return f"Ji, {agent} is taraf se. Bataiye, kis cheez mein madad chahiye?"
+    return "Ji, bataiye, kis cheez mein madad chahiye?"
+
+
+def inbound_opening_line(
+    prompt: str,
+    *,
+    greeting: str = "",
+    agent_name: str = "",
+    business_name: str = "",
+) -> str:
+    """Sentence an inbound agent says the moment the call is answered.
+
+    Only a labeled inbound opening, or a quote inside the greeting field, is used.
+    """
+    text = prompt or ""
+    for label in ("INBOUND FIRST LINE", "INBOUND OPENING", "INBOUND FIRST SENTENCE"):
+        quotes = _spoken_quotes(_section_body(text, label))
+        if quotes:
+            return quotes[0]
+
+    lowered = text.lower()
+    for marker in ("this call is inbound", "they called you"):
+        idx = lowered.find(marker)
+        if idx >= 0:
+            quotes = _spoken_quotes(text[idx:idx + 700])
+            if quotes:
+                return quotes[0]
+
+    first_line = _section_body(text, "FIRST LINE")
+    if first_line:
+        inbound_at = first_line.lower().find("inbound")
+        if inbound_at >= 0:
+            quotes = _spoken_quotes(first_line[inbound_at:])
+            if quotes:
+                return quotes[0]
+        elif "outbound" not in first_line.lower():
+            quotes = _spoken_quotes(first_line)
+            if quotes:
+                return quotes[0]
+
+    greeting_quotes = _spoken_quotes(greeting or "")
+    if greeting_quotes:
+        return greeting_quotes[0]
+    return _fallback_inbound_opening(agent_name, business_name)
+
+
+async def _speak_opening_31(session, instructions: str) -> None:
+    """Gemini 3.1 Live ignores generate_reply. Send the same turn directly so it still speaks."""
+    from google.genai import types as gt
+
+    for attempt in (1, 2):
+        try:
+            session.clear_user_turn()
+        except Exception as exc:
+            await _log("warning", f"Could not clear buffered caller audio: {exc}")
+        activity = getattr(session, "_activity", None)
+        rt = getattr(activity, "_rt_session", None) if activity else None
+        send = getattr(rt, "_send_client_event", None) if rt else None
+        if send is None:
+            await _log("warning", "Gemini 3.1 session is not ready to speak")
+            return
+        started = asyncio.Event()
+        finished = asyncio.Event()
+
+        def _on_state(ev) -> None:
+            state = getattr(ev, "new_state", None)
+            if state == "speaking":
+                started.set()
+            elif started.is_set() and state != "speaking":
+                finished.set()
+
+        session.on("agent_state_changed", _on_state)
+        try:
+            send(
+                gt.LiveClientContent(
+                    turns=[
+                        gt.Content(parts=[gt.Part(text=instructions)], role="model"),
+                        gt.Content(parts=[gt.Part(text=".")], role="user"),
+                    ],
+                    turn_complete=True,
+                )
+            )
+            await asyncio.wait_for(started.wait(), timeout=8)
+            try:
+                await asyncio.wait_for(finished.wait(), timeout=20)
+            except asyncio.TimeoutError:
+                pass
+            await _log("info", "Opening line played")
+            return
+        except asyncio.TimeoutError:
+            await _log("warning", f"Opening line did not play (attempt {attempt})")
+        except Exception as exc:
+            await _log("warning", f"Opening line send failed (attempt {attempt}): {exc}")
+        finally:
+            session.off("agent_state_changed", _on_state)
+    await _log("warning", "Opening line did not play")
+
+
+async def _speak_opening(session, instructions: str) -> None:
+    """Say the inbound opener. Retry once if the turn is empty or cut off by line noise."""
+    for attempt in (1, 2):
+        try:
+            session.clear_user_turn()
+        except Exception as exc:
+            await _log("warning", f"Could not clear buffered caller audio: {exc}")
+        handle = None
+        try:
+            handle = session.generate_reply(instructions=instructions)
+            await asyncio.wait_for(handle.wait_for_playout(), timeout=15)
+        except asyncio.TimeoutError:
+            await _log("warning", f"Opening line timed out (attempt {attempt})")
+            try:
+                await session.interrupt()
+            except Exception:
+                pass
+            continue
+        except Exception as exc:
+            await _log("warning", f"generate_reply failed (attempt {attempt}): {exc}")
+            continue
+        interrupted = bool(getattr(handle, "interrupted", False))
+        said = _spoken_from_handle(handle)
+        if said and not interrupted:
+            await _log("info", f"Opening line played: {said[:160]}")
+            return
+        await _log(
+            "warning",
+            f"Opening line did not play (attempt {attempt}, interrupted={interrupted})",
+        )
+        try:
+            await session.interrupt()
+        except Exception:
+            pass
+    await _log("warning", "Opening line did not play")
+
+
+def _spoken_from_handle(handle) -> str:
+    parts: list[str] = []
+    for item in getattr(handle, "chat_items", None) or []:
+        if getattr(item, "role", None) != "assistant":
+            continue
+        content = getattr(item, "content", "") or ""
+        if isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, list):
+            for piece in content:
+                if isinstance(piece, str):
+                    parts.append(piece)
+                else:
+                    text = getattr(piece, "text", None)
+                    if text:
+                        parts.append(str(text))
+    return " ".join(part.strip() for part in parts if part and str(part).strip()).strip()
 
 
 async def _log(level: str, msg: str, detail: str = "") -> None:
@@ -127,7 +331,7 @@ def _build_session(
 
     ⚠️ EndSensitivity MUST use full string form: END_SENSITIVITY_LOW (not .LOW — AttributeError!)
     """
-    gemini_model = model or os.getenv("GEMINI_MODEL", "gemini-3.8-live")
+    gemini_model = _live_model(model)
     gemini_voice = voice or os.getenv("GEMINI_TTS_VOICE", "Aoede")
     if audio_mode == "deepgram":
         use_realtime = False
@@ -192,7 +396,7 @@ def _build_session(
         tts = GeminiTTS(model="gemini-2.5-flash-preview-tts", voice_name=gemini_voice or "Sulafat")
     except Exception as exc:
         raise RuntimeError(f"Gemini TTS could not start for Deepgram mode: {exc}") from exc
-    # gemini-3.8-live is a speech model. The pipeline needs a text model.
+    # The live model speaks. This pipeline needs a text model.
     return AgentSession(
         stt=stt,
         llm=_google_llm(model="gemini-2.5-flash"),
@@ -314,10 +518,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         except (json.JSONDecodeError, AttributeError):
             await _log("warning", "Invalid JSON in job metadata")
 
-    # Inbound: no phone_number in metadata — detect from room name or flag
-    if not phone_number and not is_inbound:
-        if ctx.room.name.startswith("inbound-"):
-            is_inbound = True
+    # SIP dispatch rules put the caller in inbound-* with no job metadata.
+    # A phone number in metadata must not turn that room into an outbound dial.
+    if ctx.room.name.startswith("inbound-"):
+        is_inbound = True
 
     await _log("info", f"Call job received — phone={phone_number} lead={lead_name} biz={business_name} inbound={is_inbound}")
 
@@ -387,7 +591,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     if custom_prompt and "THIS CALL:" not in custom_prompt:
         if is_inbound:
             custom_prompt += (
-                "\n\nTHIS CALL: inbound. They called you. Speak the inbound first line. Do not greet."
+                "\n\nTHIS CALL: inbound. They called you and are already listening. "
+                "Speak your opening sentence immediately. Do not stay silent and do not wait for them."
             )
         else:
             custom_prompt += (
@@ -419,6 +624,34 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         site_visit_day_2=_from_job("site_visit_day_2", site_visit_day_2),
         custom_prompt=custom_prompt, inbound=is_inbound,
     )
+    opening_line = ""
+    if is_inbound:
+        # Outbound skips hi/hello and jumps to the script. That ban makes an
+        # inbound agent silent: the caller is already waiting, and the built-in
+        # scripts have no sentence they are allowed to say.
+        greeting = ""
+        if isinstance(_inbound_persona_data, dict):
+            greeting = str(_inbound_persona_data.get("greeting") or "")
+        opening_line = inbound_opening_line(
+            system_prompt,
+            greeting=greeting,
+            agent_name=agent_name_var,
+            business_name=business_name or "",
+        )
+        system_prompt += (
+            "\n\nOPENING LINE\n"
+            "The caller is already on the line and is waiting to hear a voice. "
+            "Ignore any earlier line that says not to greet, to wait, or to stay quiet — "
+            "those do not apply to this first sentence. "
+            "Say this exact sentence out loud now, then stop and listen. "
+            "Do not call a tool before it.\n"
+            f"\"{opening_line}\""
+        )
+        if greeting.strip() and not _spoken_quotes(greeting):
+            system_prompt += (
+                f"\nSay it in that spirit, without changing the words: {greeting.strip()}"
+            )
+        await _log("info", f"Inbound opening line: {opening_line}")
     tool_ctx = AppointmentTools(ctx, phone_number, lead_name, is_inbound=is_inbound, persona_data=_inbound_persona_data)
 
     if tools_override:
@@ -515,7 +748,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     elif is_inbound:
         tool_ctx._call_start_time = time.time()
 
-    gemini_model = model_override or os.getenv("GEMINI_MODEL", "gemini-3.8-live")
+    gemini_model = _live_model(model_override)
+    model_override = gemini_model
     opening_voice = voice_override or os.getenv("GEMINI_TTS_VOICE", "Aoede")
 
     # ── Build and start the session ──────────────────────────────────────────
@@ -653,19 +887,36 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     if phone_number:
         asyncio.create_task(_start_s3_recording(ctx, tool_ctx))
 
-    # No separate greeting. Gemini Live will not speak until a reply is requested,
-    # so this turn is the first real line — not "Hi, this is …".
-    opening = (
-        "The call just connected. Do not greet: no hi, hello, good morning, "
-        "and do not ask if you are speaking with them. "
-        "Say the first real line of your instructions now, in one short sentence. "
-        "Do not wait for the caller, and do not call any tool before this sentence."
-    )
-    try:
-        await session.generate_reply(instructions=opening)
-        await _log("info", "Opening line triggered via generate_reply — no greeting")
-    except Exception as _gr_exc:
-        await _log("warning", f"generate_reply failed: {_gr_exc}")
+    # Gemini Live stays silent until a reply is requested. Outbound still skips
+    # hi/hello and speaks the script. Inbound must say a concrete sentence: the
+    # caller is already on the line, and "do not greet" with no allowed line
+    # produces an empty turn.
+    if is_inbound:
+        opening = (
+            "The caller is already listening. Say this exact sentence out loud now, then stop: "
+            f"\"{opening_line}\" "
+            "Do not stay silent. Do not wait for them to speak first. "
+            "Do not call any tool before this sentence."
+        )
+        if "3.1" in gemini_model and audio_mode != "deepgram":
+            await _speak_opening_31(session, opening)
+        else:
+            await _speak_opening(session, opening)
+    else:
+        opening = (
+            "The call just connected. Do not greet: no hi, hello, good morning, "
+            "and do not ask if you are speaking with them. "
+            "Say the first real line of your instructions now, in one short sentence. "
+            "Do not wait for the caller, and do not call any tool before this sentence."
+        )
+        if "3.1" in gemini_model and audio_mode != "deepgram":
+            await _speak_opening_31(session, opening)
+        else:
+            try:
+                await session.generate_reply(instructions=opening)
+                await _log("info", "Opening line triggered via generate_reply — no greeting")
+            except Exception as _gr_exc:
+                await _log("warning", f"generate_reply failed: {_gr_exc}")
 
     # ── Wait for SIP participant to leave, then fallback-log if needed ────────
     if phone_number or is_inbound:

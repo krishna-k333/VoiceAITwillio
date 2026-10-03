@@ -17,6 +17,17 @@ from livekit import api, rtc
 logger = logging.getLogger("vobiz-bridge")
 
 
+def _vobiz_stream_id(data: dict, start_info: dict) -> Optional[str]:
+    for src in (data, start_info):
+        if not isinstance(src, dict):
+            continue
+        for key in ("streamId", "stream_id", "StreamId"):
+            value = src.get(key)
+            if value:
+                return str(value)
+    return None
+
+
 async def handle_vobiz_websocket(websocket: WebSocket):
     await websocket.accept()
     logger.info("Vobiz WebSocket connected!")
@@ -28,12 +39,14 @@ async def handle_vobiz_websocket(websocket: WebSocket):
     caller_phone: str = "unknown"
     agent_task: Optional[asyncio.Task] = None
     media_count = 0
+    warned_missing_stream = False
 
     livekit_url = os.getenv("LIVEKIT_URL", "")
     api_key = os.getenv("LIVEKIT_API_KEY", "")
     api_secret = os.getenv("LIVEKIT_API_SECRET", "")
 
     async def stream_agent_audio(remote_track: rtc.RemoteAudioTrack):
+        nonlocal warned_missing_stream
         try:
             # Resample to 16kHz mono 20ms frames matching Vobiz requirement
             audio_stream = rtc.AudioStream(
@@ -46,6 +59,13 @@ async def handle_vobiz_websocket(websocket: WebSocket):
             frames_sent = 0
             async for frame in audio_stream:
                 if not stream_id:
+                    # playAudio without streamId is dropped by Vobiz, so the caller hears silence.
+                    if not warned_missing_stream:
+                        warned_missing_stream = True
+                        logger.warning(
+                            "Agent audio arrived before a Vobiz streamId — "
+                            "frames are dropped until the start event includes streamId"
+                        )
                     continue
                 payload = base64.b64encode(frame.data).decode("utf-8")
                 msg = {
@@ -71,8 +91,8 @@ async def handle_vobiz_websocket(websocket: WebSocket):
             event = data.get("event")
 
             if event == "start":
-                start_info = data.get("start", {})
-                stream_id = data.get("streamId") or start_info.get("streamId")
+                start_info = data.get("start") if isinstance(data.get("start"), dict) else {}
+                stream_id = _vobiz_stream_id(data, start_info)
                 call_id = data.get("callId") or start_info.get("callId") or str(uuid.uuid4())[:8]
                 caller_phone = (
                     data.get("from")

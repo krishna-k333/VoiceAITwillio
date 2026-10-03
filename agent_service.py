@@ -128,7 +128,7 @@ def _save_built(built: dict, audio_mode: str, voice: str) -> dict:
         agent_name=built.get("agent_name") or "",
         direction=built.get("direction") or "both",
         voice=built.get("voice") or "Sulafat",
-        model=built.get("model") or "gemini-3.8-live",
+        model=built.get("model") or "gemini-3.1-flash-live-preview",
         audio_mode=built["audio_mode"],
         system_prompt=built.get("system_prompt") or "",
         source=built.get("source") or "manual",
@@ -219,7 +219,7 @@ def get_agent(agent_id: str) -> dict:
         model = "gemini-2.5-flash"
     else:
         audio = "Gemini hears the caller and speaks on the same live model."
-        model = persona.get("model") or "gemini-3.8-live"
+        model = persona.get("model") or "gemini-3.1-flash-live-preview"
     active_for = [side for side in ("inbound", "outbound") if active_persona_id(side) == persona["id"]]
     return {
         **persona,
@@ -264,7 +264,7 @@ def edit_selected_prompt(side: str, system_prompt: str) -> dict:
         agent_name=persona.get("agent_name") or "",
         direction=persona.get("direction") or "both",
         voice=persona.get("voice") or "Sulafat",
-        model=persona.get("model") or "gemini-3.8-live",
+        model=persona.get("model") or "gemini-3.1-flash-live-preview",
         audio_mode=persona.get("audio_mode") or "gemini",
         system_prompt=system_prompt,
         enabled_tools=persona.get("enabled_tools") or "[]",

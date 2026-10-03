@@ -236,7 +236,7 @@ class CallRequest(BaseModel):
 class AgentProfileRequest(BaseModel):
     name: str
     voice: str = "Aoede"
-    model: str = "gemini-3.8-live"
+    model: str = "gemini-3.1-flash-live-preview"
     system_prompt: Optional[str] = None
     enabled_tools: str = "[]"
     is_default: bool = False
@@ -438,7 +438,7 @@ class PersonaRequest(BaseModel):
     agent_name: str = ""
     direction: str = "both"
     voice: str = "Sulafat"
-    model: str = "gemini-3.8-live"
+    model: str = "gemini-3.1-flash-live-preview"
     audio_mode: str = "gemini"
     system_prompt: str = ""
     enabled_tools: str = "[]"
@@ -851,7 +851,10 @@ async def api_setup_inbound_trunk(provider: str = "voicelink"):
                 trunk_ids=[trunk_id],
                 name=f"{trunk_name} Dispatch",
                 room_config=lk_api.RoomConfiguration(
-                    agents=[lk_api.RoomAgentDispatch(agent_name="outbound-caller")],
+                    agents=[lk_api.RoomAgentDispatch(
+                        agent_name="outbound-caller",
+                        metadata=json.dumps({"inbound": True}),
+                    )],
                 ),
             )
         )
