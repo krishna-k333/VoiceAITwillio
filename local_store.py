@@ -56,6 +56,34 @@ def init_local_db() -> None:
                 value TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS appointments (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                phone TEXT NOT NULL,
+                date TEXT NOT NULL,
+                time TEXT NOT NULL,
+                service TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'booked',
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS call_logs (
+                id TEXT PRIMARY KEY,
+                phone_number TEXT NOT NULL,
+                lead_name TEXT,
+                outcome TEXT NOT NULL,
+                reason TEXT,
+                duration_seconds INTEGER DEFAULT 0,
+                timestamp TEXT NOT NULL,
+                recording_url TEXT,
+                notes TEXT,
+                ended_by TEXT DEFAULT 'unknown'
+            );
+            CREATE TABLE IF NOT EXISTS contact_memory (
+                id TEXT PRIMARY KEY,
+                phone TEXT NOT NULL,
+                insight TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
             """
         )
         # Add email_theme column to existing databases that don't have it
@@ -276,3 +304,107 @@ def call_fields(persona: Optional[dict]) -> dict:
     if persona.get("prompt_vars"):
         fields["prompt_vars"] = persona["prompt_vars"]
     return fields
+
+
+def local_check_slot(date: str, time: str) -> bool:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM appointments WHERE date = ? AND time = ? AND status = 'booked' LIMIT 1",
+            (date, time)
+        ).fetchone()
+    return row is None
+
+
+def local_get_next_available(date: str, time: str) -> str:
+    from datetime import datetime, timedelta
+    try:
+        dt = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
+    except ValueError:
+        dt = datetime.now().replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    for _ in range(7 * 24):
+        dt += timedelta(hours=1)
+        if 9 <= dt.hour < 18:
+            d_str = dt.strftime("%Y-%m-%d")
+            t_str = dt.strftime("%H:%M")
+            if local_check_slot(d_str, t_str):
+                return f"{d_str} at {t_str}"
+    return "no open slots found in the next 7 days"
+
+
+def local_insert_appointment(name: str, phone: str, date: str, time: str, service: str) -> str:
+    full_id = str(uuid.uuid4())
+    booking_id = full_id[:8].upper()
+    now_iso = datetime.now().isoformat()
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO appointments (id, name, phone, date, time, service, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'booked', ?)",
+            (booking_id, name, phone, date, time, service, now_iso)
+        )
+    return booking_id
+
+
+def local_get_all_appointments(date_filter: Optional[str] = None) -> list:
+    with _connect() as conn:
+        if date_filter:
+            rows = conn.execute(
+                "SELECT * FROM appointments WHERE date = ? ORDER BY time ASC", (date_filter,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM appointments ORDER BY date ASC, time ASC"
+            ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def local_log_call(
+    phone_number: str, lead_name: Optional[str], outcome: str, reason: str,
+    duration_seconds: int, recording_url: Optional[str] = None, notes: Optional[str] = None,
+    ended_by: str = "unknown",
+) -> None:
+    call_id = str(uuid.uuid4())
+    now_iso = datetime.now().isoformat()
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO call_logs 
+            (id, phone_number, lead_name, outcome, reason, duration_seconds, timestamp, recording_url, notes, ended_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (call_id, phone_number, lead_name, outcome, reason, duration_seconds, now_iso, recording_url, notes, ended_by)
+        )
+
+
+def local_get_all_calls(page: int = 1, limit: int = 20) -> list:
+    offset = (page - 1) * limit
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM call_logs ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            (limit, offset)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def local_get_calls_by_phone(phone: str) -> list:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM call_logs WHERE phone_number = ? ORDER BY timestamp DESC LIMIT 10",
+            (phone,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def local_add_contact_memory(phone: str, insight: str) -> None:
+    mem_id = str(uuid.uuid4())
+    now_iso = datetime.now().isoformat()
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO contact_memory (id, phone, insight, created_at) VALUES (?, ?, ?, ?)",
+            (mem_id, phone, insight, now_iso)
+        )
+
+
+def local_get_contact_memory(phone: str) -> list:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM contact_memory WHERE phone = ? ORDER BY created_at DESC LIMIT 10",
+            (phone,)
+        ).fetchall()
+    return [dict(r) for r in rows]

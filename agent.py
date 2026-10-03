@@ -425,27 +425,18 @@ def _build_session(
             _realtime_input_cfg = _gt.RealtimeInputConfig(
                 automatic_activity_detection=_gt.AutomaticActivityDetection(
                     end_of_speech_sensitivity=_gt.EndSensitivity.END_SENSITIVITY_LOW,
-                    silence_duration_ms=600,
-                    prefix_padding_ms=200,
+                    silence_duration_ms=850,
+                    prefix_padding_ms=250,
                 ),
             )
-            _session_resumption_cfg = _gt.SessionResumptionConfig(transparent=True)
-            _ctx_compression_cfg = _gt.ContextWindowCompressionConfig(
-                trigger_tokens=25600,
-                sliding_window=_gt.SlidingWindow(target_tokens=12800),
-            )
-            logger.info("Silence-prevention config applied (VAD LOW, transparent resumption, context compression)")
+            logger.info("Telephony VAD config applied (sensitivity=LOW, silence=850ms)")
         except Exception as _cfg_err:
-            logger.warning("Could not build silence-prevention config: %s", _cfg_err)
+            logger.warning("Could not build VAD config: %s", _cfg_err)
             _realtime_input_cfg = None
-            _session_resumption_cfg = None
-            _ctx_compression_cfg = None
 
         realtime_kwargs: dict = dict(model=gemini_model, voice=gemini_voice, instructions=system_prompt)
         if _realtime_input_cfg is not None:
-            realtime_kwargs["realtime_input_config"]      = _realtime_input_cfg
-            realtime_kwargs["session_resumption"]         = _session_resumption_cfg
-            realtime_kwargs["context_window_compression"] = _ctx_compression_cfg
+            realtime_kwargs["realtime_input_config"] = _realtime_input_cfg
 
         return AgentSession(llm=RealtimeClass(**realtime_kwargs), tools=tools)
 
@@ -818,7 +809,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         "\n\nCRITICAL RULES ON TOOL CALLS AND RESPONSES:\n"
         "1. NEVER STAY SILENT AFTER A TOOL RUNS! When any tool completes and returns its result, you MUST IMMEDIATELY speak back to the caller in 1-2 friendly, natural sentences without waiting for them to say anything.\n"
         "2. Communicate the tool result directly to the caller (e.g. confirm the slot is available, confirm the booking is done, confirm the SMS/email is sent).\n"
-        "3. Never call lookup_contact at the start of the call. Always greet and talk first!"
+        "3. Never call lookup_contact at the start of the call. Always greet and talk first!\n"
+        "4. Always call check_availability FIRST when a day/time is proposed. Announce that the slot is open and ask the caller to confirm before calling book_appointment. Never call both in the same breath!"
     )
 
     # ── Pre-load tools & build session BEFORE dialing so answering has zero latency ──

@@ -98,7 +98,8 @@ class AppointmentTools(llm.ToolContext):
     async def check_availability(self, date: str, time: str) -> str:
         """
         Check whether a date/time slot is available for booking.
-        Call this BEFORE attempting to book whenever the lead proposes a date/time.
+        Call this when the lead proposes a date and time.
+        Do NOT call book_appointment in the same turn — tell the caller the slot is open first!
         date format: YYYY-MM-DD  |  time format: HH:MM (24-hour)
         Returns slot availability.
         """
@@ -109,13 +110,13 @@ class AppointmentTools(llm.ToolContext):
             return f"Slot on {date} at {time} is NOT available. The next available slot is {next_slot}. Suggest this alternative to the caller."
         except Exception as exc:
             logger.warning("check_availability error: %s", exc)
-            return f"Slot on {date} at {time} is available. Confirm this slot with the caller and proceed to book."
+            return f"Slot on {date} at {time} is available. Confirm this slot with the caller and ask if you should book it."
 
     @llm.function_tool
     async def book_appointment(self, name: str, phone: str, date: str, time: str, service: str, email: str = "") -> str:
         """
-        Book an appointment after the lead has verbally confirmed date, time, and service.
-        Call ONLY after the lead confirms all details.
+        Book an appointment after the lead has verbally confirmed they want the slot.
+        Call ONLY after check_availability confirmed the slot and the caller agreed to book.
         name: lead's full name | phone: with country code | date: YYYY-MM-DD | time: HH:MM | service: type
         email: caller's email address — if provided, sends confirmation email and creates Google Calendar event
         """

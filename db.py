@@ -50,6 +50,12 @@ SENSITIVE_KEYS = {
 }
 
 
+_supabase_connected: bool = False
+
+def is_supabase_connected() -> bool:
+    global _supabase_connected
+    return _supabase_connected
+
 def _sdb():
     from supabase import create_client
     return create_client(_default("SUPABASE_URL"), _default("SUPABASE_SERVICE_KEY"))
@@ -61,20 +67,23 @@ async def _adb():
 
 
 def init_db() -> None:
+    global _supabase_connected
     from local_store import init_local_db
     init_local_db()
     url = os.getenv("SUPABASE_URL", SUPABASE_URL)
     key = os.getenv("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
     if not url or not key:
-        print("⚠️  SUPABASE_URL or SUPABASE_SERVICE_KEY not set.")
+        print("[DB] SUPABASE_URL not configured - using fast local SQLite database.")
+        _supabase_connected = False
         return
     try:
         db = _sdb()
         db.table("settings").select("key").limit(1).execute()
-        print("✅ Supabase connected")
+        _supabase_connected = True
+        print("[DB] Supabase connected successfully.")
     except Exception as exc:
-        print(f"⚠️  Supabase connection failed: {exc}")
-        print("   Run supabase_schema.sql in your Supabase Dashboard → SQL Editor")
+        _supabase_connected = False
+        print(f"[DB] Supabase unavailable ({exc}) - using fast local SQLite database.")
 
 
 # ── Settings ─────────────────────────────────────────────────────────────────
@@ -202,72 +211,83 @@ async def clear_errors() -> None:
 # ── Appointments ──────────────────────────────────────────────────────────────
 
 async def insert_appointment(name: str, phone: str, date: str, time: str, service: str) -> str:
-    full_id = str(uuid.uuid4())
-    booking_id = full_id[:8].upper()
-    try:
-        db = await _adb()
-        await db.table("appointments").insert({
-            "id": full_id, "name": name, "phone": phone,
-            "date": date, "time": time, "service": service,
-            "status": "booked", "created_at": datetime.now().isoformat(),
-        }).execute()
-    except Exception as exc:
-        import logging as _logging
-        _logging.getLogger("outbound-agent").warning("insert_appointment DB fallback: %s", exc)
+    from local_store import local_insert_appointment
+    booking_id = local_insert_appointment(name, phone, date, time, service)
+    if _supabase_connected:
+        try:
+            db = await _adb()
+            await db.table("appointments").insert({
+                "id": booking_id, "name": name, "phone": phone,
+                "date": date, "time": time, "service": service,
+                "status": "booked", "created_at": datetime.now().isoformat(),
+            }).execute()
+        except Exception:
+            pass
     return booking_id
 
 
 async def check_slot(date: str, time: str) -> bool:
     """Returns True if slot is available (no existing booking)."""
-    try:
-        db = await _adb()
-        result = await (
-            db.table("appointments").select("id")
-            .eq("date", date).eq("time", time).eq("status", "booked")
-            .maybe_single().execute()
-        )
-        return result.data is None
-    except Exception as exc:
-        import logging as _logging
-        _logging.getLogger("outbound-agent").warning("check_slot DB fallback (assuming open): %s", exc)
-        return True
+    from local_store import local_check_slot
+    if _supabase_connected:
+        try:
+            db = await _adb()
+            result = await (
+                db.table("appointments").select("id")
+                .eq("date", date).eq("time", time).eq("status", "booked")
+                .maybe_single().execute()
+            )
+            return result.data is None
+        except Exception:
+            pass
+    return local_check_slot(date, time)
 
 
 async def get_next_available(date: str, time: str) -> str:
-    try:
-        dt = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
-    except ValueError:
-        dt = datetime.now().replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-    for _ in range(7 * 24):
-        dt += timedelta(hours=1)
-        if 9 <= dt.hour < 18:
-            if await check_slot(dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M")):
-                return f"{dt.strftime('%Y-%m-%d')} at {dt.strftime('%H:%M')}"
-    return "no open slots found in the next 7 days"
+    from local_store import local_get_next_available
+    return local_get_next_available(date, time)
 
 
 async def get_all_appointments(date_filter: Optional[str] = None) -> list:
-    db = await _adb()
-    query = db.table("appointments").select("*").order("date").order("time")
-    if date_filter:
-        query = query.eq("date", date_filter)
-    result = await query.execute()
-    return result.data or []
+    if _supabase_connected:
+        try:
+            db = await _adb()
+            query = db.table("appointments").select("*").order("date").order("time")
+            if date_filter:
+                query = query.eq("date", date_filter)
+            result = await query.execute()
+            if result.data:
+                return result.data
+        except Exception:
+            pass
+    from local_store import local_get_all_appointments
+    return local_get_all_appointments(date_filter)
 
 
 async def cancel_appointment(appointment_id: str) -> bool:
-    db = await _adb()
-    result = await (
-        db.table("appointments").update({"status": "cancelled"})
-        .eq("id", appointment_id).eq("status", "booked").execute()
-    )
-    return len(result.data or []) > 0
+    if _supabase_connected:
+        try:
+            db = await _adb()
+            result = await (
+                db.table("appointments").update({"status": "cancelled"})
+                .eq("id", appointment_id).eq("status", "booked").execute()
+            )
+            return len(result.data or []) > 0
+        except Exception:
+            pass
+    return False
 
 
 async def get_appointments_by_phone(phone: str) -> list:
-    db = await _adb()
-    result = await db.table("appointments").select("*").eq("phone", phone).order("date", desc=True).execute()
-    return result.data or []
+    if _supabase_connected:
+        try:
+            db = await _adb()
+            result = await db.table("appointments").select("*").eq("phone", phone).order("date", desc=True).execute()
+            if result.data:
+                return result.data
+        except Exception:
+            pass
+    return []
 
 
 # ── Call logs ─────────────────────────────────────────────────────────────────
@@ -277,67 +297,30 @@ async def log_call(
     duration_seconds: int, recording_url: Optional[str] = None, notes: Optional[str] = None,
     ended_by: str = "unknown",
 ) -> None:
-    db = await _adb()
-    row: dict = {
-        "id": str(uuid.uuid4()), "phone_number": phone_number, "lead_name": lead_name,
-        "outcome": outcome, "reason": reason, "duration_seconds": duration_seconds,
-        "timestamp": datetime.now().isoformat(), "ended_by": ended_by,
-    }
-    if recording_url:
-        row["recording_url"] = recording_url
-    if notes:
-        row["notes"] = notes
-    try:
-        await db.table("call_logs").insert(row).execute()
-    except Exception as _e:
-        # If ended_by column doesn't exist yet (migration pending), retry without it
-        if "ended_by" in str(_e):
-            row.pop("ended_by", None)
+    from local_store import local_log_call
+    local_log_call(phone_number, lead_name, outcome, reason, duration_seconds, recording_url, notes, ended_by)
+    if _supabase_connected:
+        try:
+            db = await _adb()
+            row = {
+                "id": str(uuid.uuid4()), "phone_number": phone_number, "lead_name": lead_name,
+                "outcome": outcome, "reason": reason, "duration_seconds": duration_seconds,
+                "timestamp": datetime.now().isoformat(), "ended_by": ended_by,
+            }
+            if recording_url: row["recording_url"] = recording_url
+            if notes: row["notes"] = notes
             await db.table("call_logs").insert(row).execute()
-        else:
-            raise
+        except Exception:
+            pass
 
 
 def log_call_sync(
     phone_number: str, lead_name: Optional[str], outcome: str, reason: str,
     duration_seconds: int, recording_url: Optional[str] = None, ended_by: str = "unknown",
 ) -> None:
-    """Synchronous call logger — safe to call from threads or during event-loop teardown."""
-    import requests as _req
-    url = _default("SUPABASE_URL")
-    key = _default("SUPABASE_SERVICE_KEY")
-    if not url or not key:
-        return
-    row = {
-        "id": str(uuid.uuid4()), "phone_number": phone_number,
-        "lead_name": lead_name, "outcome": outcome, "reason": reason,
-        "duration_seconds": duration_seconds,
-        "timestamp": datetime.now().isoformat(), "ended_by": ended_by,
-    }
-    if recording_url:
-        row["recording_url"] = recording_url
-    headers = {"apikey": key, "Authorization": f"Bearer {key}",
-               "Content-Type": "application/json", "Prefer": "return=minimal"}
-    endpoint = f"{url.rstrip('/')}/rest/v1/call_logs"
-    try:
-        resp = _req.post(endpoint, json=row, headers=headers, timeout=10)
-        if resp.status_code >= 300:
-            import logging as _logging
-            # If ended_by column missing (migration not run yet), retry without it
-            if resp.status_code == 400 and "ended_by" in resp.text:
-                row.pop("ended_by", None)
-                resp2 = _req.post(endpoint, json=row, headers=headers, timeout=10)
-                if resp2.status_code >= 300:
-                    _logging.getLogger("outbound-agent").error(
-                        "log_call_sync retry HTTP %s: %s", resp2.status_code, resp2.text[:200]
-                    )
-            else:
-                _logging.getLogger("outbound-agent").error(
-                    "log_call_sync HTTP %s: %s", resp.status_code, resp.text[:200]
-                )
-    except Exception as _e:
-        import logging as _logging
-        _logging.getLogger("outbound-agent").error("log_call_sync failed: %s", _e)
+    """Synchronous call logger — writes directly to local SQLite without network delay."""
+    from local_store import local_log_call
+    local_log_call(phone_number, lead_name, outcome, reason, duration_seconds, recording_url, None, ended_by)
 
 
 def _effective_call_duration(row: dict) -> int:
@@ -353,26 +336,30 @@ def _normalize_call_durations(rows: list) -> list:
 
 
 async def get_all_calls(page: int = 1, limit: int = 20) -> list:
-    try:
-        db = await _adb()
-        offset = (page - 1) * limit
-        result = await db.table("call_logs").select("*").order("timestamp", desc=True).range(offset, offset + limit - 1).execute()
-        return _normalize_call_durations(result.data or [])
-    except Exception as exc:
-        import logging as _logging
-        _logging.getLogger("outbound-agent").warning(f"get_all_calls fallback (DB offline): {exc}")
-        return []
+    if _supabase_connected:
+        try:
+            db = await _adb()
+            offset = (page - 1) * limit
+            result = await db.table("call_logs").select("*").order("timestamp", desc=True).range(offset, offset + limit - 1).execute()
+            if result.data:
+                return _normalize_call_durations(result.data)
+        except Exception:
+            pass
+    from local_store import local_get_all_calls
+    return _normalize_call_durations(local_get_all_calls(page, limit))
 
 
 async def get_calls_by_phone(phone: str) -> list:
-    try:
-        db = await _adb()
-        result = await db.table("call_logs").select("*").eq("phone_number", phone).order("timestamp", desc=True).execute()
-        return _normalize_call_durations(result.data or [])
-    except Exception as exc:
-        import logging as _logging
-        _logging.getLogger("outbound-agent").warning(f"get_calls_by_phone fallback (DB offline): {exc}")
-        return []
+    if _supabase_connected:
+        try:
+            db = await _adb()
+            result = await db.table("call_logs").select("*").eq("phone_number", phone).order("timestamp", desc=True).limit(10).execute()
+            if result.data:
+                return result.data
+        except Exception:
+            pass
+    from local_store import local_get_calls_by_phone
+    return local_get_calls_by_phone(phone)
 
 
 async def update_call_notes(call_id: str, notes: str) -> bool:
@@ -692,29 +679,46 @@ async def delete_campaign(campaign_id: str) -> bool:
 # ── Contact Memory ────────────────────────────────────────────────────────────
 
 async def add_contact_memory(phone: str, insight: str) -> None:
-    db = await _adb()
-    await db.table("contact_memory").insert({
-        "id": str(uuid.uuid4()), "phone_number": phone,
-        "insight": insight[:1000], "created_at": datetime.now().isoformat(),
-    }).execute()
+    from local_store import local_add_contact_memory
+    local_add_contact_memory(phone, insight)
+    if _supabase_connected:
+        try:
+            db = await _adb()
+            await db.table("contact_memory").insert({
+                "id": str(uuid.uuid4()), "phone_number": phone,
+                "insight": insight[:1000], "created_at": datetime.now().isoformat(),
+            }).execute()
+        except Exception:
+            pass
 
 
 async def get_contact_memory(phone: str) -> list:
-    db = await _adb()
-    result = await (
-        db.table("contact_memory").select("insight, created_at")
-        .eq("phone_number", phone).order("created_at", desc=True).limit(20).execute()
-    )
-    return result.data or []
+    if _supabase_connected:
+        try:
+            db = await _adb()
+            result = await (
+                db.table("contact_memory").select("insight, created_at")
+                .eq("phone_number", phone).order("created_at", desc=True).limit(20).execute()
+            )
+            if result.data:
+                return result.data
+        except Exception:
+            pass
+    from local_store import local_get_contact_memory
+    return local_get_contact_memory(phone)
 
 
 async def compress_contact_memory(phone: str, compressed: str) -> None:
-    db = await _adb()
-    await db.table("contact_memory").delete().eq("phone_number", phone).execute()
-    await db.table("contact_memory").insert({
-        "id": str(uuid.uuid4()), "phone_number": phone,
-        "insight": compressed[:2000], "created_at": datetime.now().isoformat(),
-    }).execute()
+    if _supabase_connected:
+        try:
+            db = await _adb()
+            await db.table("contact_memory").delete().eq("phone_number", phone).execute()
+            await db.table("contact_memory").insert({
+                "id": str(uuid.uuid4()), "phone_number": phone,
+                "insight": compressed[:2000], "created_at": datetime.now().isoformat(),
+            }).execute()
+        except Exception:
+            pass
 
 
 # ── Agent Profiles ────────────────────────────────────────────────────────────
