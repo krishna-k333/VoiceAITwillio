@@ -650,13 +650,13 @@ async def vobiz_answer_webhook(request: Request):
     Called by Vobiz Voice Applications when an inbound call arrives.
     Returns Vobiz XML instructing Vobiz to bridge the call to LiveKit SIP URI.
     """
-    logger.info("Vobiz inbound answer webhook called!")
+    body = await request.body()
+    logger.info(f"Vobiz answer webhook: query={dict(request.query_params)} body={body.decode('utf-8', errors='ignore')}")
     did = await eff("VOBIZ_OUTBOUND_NUMBER") or "+918064261651"
-    # LiveKit SIP URI: dial the number or username at LiveKit Cloud
     sip_uri = f"sip:{did}@test-zej844je.sip.livekit.cloud"
     xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Dial>
+    <Dial callerId="{did}">
         <User>{sip_uri}</User>
     </Dial>
 </Response>"""
@@ -666,6 +666,8 @@ async def vobiz_answer_webhook(request: Request):
 @app.api_route("/api/vobiz/hangup", methods=["GET", "POST"])
 @app.api_route("/webhook/vobiz/hangup", methods=["GET", "POST"])
 async def vobiz_hangup_webhook(request: Request):
+    body = await request.body()
+    logger.info(f"Vobiz hangup webhook: query={dict(request.query_params)} body={body.decode('utf-8', errors='ignore')}")
     return Response(content="<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response/>", media_type="application/xml")
 
 
