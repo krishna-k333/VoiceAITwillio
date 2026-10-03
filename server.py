@@ -24,7 +24,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -136,7 +136,7 @@ def _check_session(token: str) -> bool:
 
 
 class _AuthMiddleware(BaseHTTPMiddleware):
-    _PUBLIC = {"/api/login", "/api/logout", "/api/auth/check"}
+    _PUBLIC = {"/api/login", "/api/logout", "/api/auth/check", "/api/vobiz/answer", "/api/vobiz/hangup", "/webhook/vobiz/answer", "/webhook/vobiz/hangup"}
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -639,6 +639,34 @@ async def api_setup_inbound_trunk(provider: str = "voicelink"):
         }
     except Exception as exc:
         raise HTTPException(500, f"Inbound trunk creation failed: {exc}")
+
+
+# ── Vobiz Voice Application Webhook ──────────────────────────────────────────
+
+@app.api_route("/api/vobiz/answer", methods=["GET", "POST"])
+@app.api_route("/webhook/vobiz/answer", methods=["GET", "POST"])
+async def vobiz_answer_webhook(request: Request):
+    """
+    Called by Vobiz Voice Applications when an inbound call arrives.
+    Returns Vobiz XML instructing Vobiz to bridge the call to LiveKit SIP URI.
+    """
+    logger.info("Vobiz inbound answer webhook called!")
+    did = await eff("VOBIZ_OUTBOUND_NUMBER") or "+918064261651"
+    # LiveKit SIP URI: dial the number or username at LiveKit Cloud
+    sip_uri = f"sip:{did}@test-zej844je.sip.livekit.cloud"
+    xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Dial>
+        <User>{sip_uri}</User>
+    </Dial>
+</Response>"""
+    return Response(content=xml_content, media_type="application/xml")
+
+
+@app.api_route("/api/vobiz/hangup", methods=["GET", "POST"])
+@app.api_route("/webhook/vobiz/hangup", methods=["GET", "POST"])
+async def vobiz_hangup_webhook(request: Request):
+    return Response(content="<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response/>", media_type="application/xml")
 
 
 # ── Logs ──────────────────────────────────────────────────────────────────────
