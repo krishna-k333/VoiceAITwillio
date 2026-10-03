@@ -14,7 +14,10 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecurityMiddleware, TransportSecuritySettings
 
 # Reverse-proxy bypass: authentication is handled exclusively by _ApiKeyGate
-TransportSecurityMiddleware.validate_request = lambda self, req, is_post=False: None
+async def _bypass_security(self, request, is_post=False):
+    return None
+
+TransportSecurityMiddleware.validate_request = _bypass_security
 
 load_dotenv(".env")
 
