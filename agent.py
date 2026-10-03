@@ -146,7 +146,7 @@ async def _speak_opening_31(session, instructions: str) -> None:
     """Gemini 3.1 Live ignores generate_reply. Send the same turn directly so it still speaks."""
     from google.genai import types as gt
 
-    for attempt in (1, 2):
+    for attempt in (1, 2, 3):
         try:
             session.clear_user_turn()
         except Exception as exc:
@@ -155,7 +155,12 @@ async def _speak_opening_31(session, instructions: str) -> None:
         rt = getattr(activity, "_rt_session", None) if activity else None
         send = getattr(rt, "_send_client_event", None) if rt else None
         if send is None:
-            await _log("warning", "Gemini 3.1 session is not ready to speak")
+            if attempt < 3:
+                await _log("info", f"Gemini 3.1 session not ready yet (attempt {attempt}/3), waiting 2s...")
+                await asyncio.sleep(2)
+                continue
+            await _log("warning", "Gemini 3.1 session never became ready — falling back to generate_reply")
+            await _speak_opening(session, instructions)
             return
         started = asyncio.Event()
         finished = asyncio.Event()
@@ -178,20 +183,21 @@ async def _speak_opening_31(session, instructions: str) -> None:
                     turn_complete=True,
                 )
             )
-            await asyncio.wait_for(started.wait(), timeout=8)
+            await asyncio.wait_for(started.wait(), timeout=10)
             try:
                 await asyncio.wait_for(finished.wait(), timeout=20)
             except asyncio.TimeoutError:
                 pass
-            await _log("info", "Opening line played")
+            await _log("info", "Opening line played (3.1 direct)")
             return
         except asyncio.TimeoutError:
-            await _log("warning", f"Opening line did not play (attempt {attempt})")
+            await _log("warning", f"Opening line did not play (3.1 attempt {attempt})")
         except Exception as exc:
-            await _log("warning", f"Opening line send failed (attempt {attempt}): {exc}")
+            await _log("warning", f"Opening line send failed (3.1 attempt {attempt}): {exc}")
         finally:
             session.off("agent_state_changed", _on_state)
-    await _log("warning", "Opening line did not play")
+    await _log("warning", "3.1 direct send exhausted — falling back to generate_reply")
+    await _speak_opening(session, instructions)
 
 
 async def _speak_opening(session, instructions: str) -> None:
@@ -549,6 +555,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             "agent_name": saved.get("agent_name"),
             "voice": saved.get("voice"),
             "prompt": saved.get("system_prompt"),
+            "email_theme": saved.get("email_theme"),
         }
 
     try:
@@ -886,6 +893,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # ── Optional S3 recording (runs in background so the opening line is not blocked) ────
     if phone_number:
         asyncio.create_task(_start_s3_recording(ctx, tool_ctx))
+
+    # For inbound calls, wait briefly for the caller's audio bridge to connect
+    # before speaking. Without this, the agent can speak into the void before
+    # the Vobiz/SIP bridge has subscribed to the agent's audio track.
+    if is_inbound:
+        for _wait in range(10):
+            if any(p.identity.startswith("sip_") or p.identity.startswith("+")
+                   for p in ctx.room.remote_participants.values()):
+                await _log("info", "Caller participant detected — ready to speak")
+                break
+            await asyncio.sleep(0.5)
+        else:
+            await _log("warning", "No caller participant detected after 5s — speaking anyway")
 
     # Gemini Live stays silent until a reply is requested. Outbound still skips
     # hi/hello and speaks the script. Inbound must say a concrete sentence: the

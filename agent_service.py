@@ -44,13 +44,23 @@ AGENT_TOOLS = [
     },
     {
         "name": "book_appointment",
-        "description": "Books the appointment after the caller confirms the details.",
+        "description": "Books the appointment after the caller confirms the details. Creates Google Calendar event and sends email when email is provided.",
         "when": "Only after they agree.",
     },
     {
         "name": "send_sms_confirmation",
         "description": "Sends a confirmation text. Skips itself if Twilio is not configured.",
         "when": "After a booking.",
+    },
+    {
+        "name": "send_email",
+        "description": "Sends a branded confirmation email with the persona's theme colors.",
+        "when": "After a booking when email is available, or when the caller asks for email confirmation.",
+    },
+    {
+        "name": "create_google_calendar_event",
+        "description": "Creates a Google Calendar event for the appointment.",
+        "when": "After book_appointment succeeds, when Google OAuth is configured.",
     },
     {
         "name": "remember_details",
@@ -73,9 +83,14 @@ AGENT_TOOLS = [
         "when": "When they ask for a person or the request is outside the script.",
     },
     {
+        "name": "hangup",
+        "description": "Says goodbye and ends the call. No outcome needed — auto-detects from context.",
+        "when": "Whenever the conversation has naturally ended.",
+    },
+    {
         "name": "end_call",
-        "description": "Logs the outcome and hangs up.",
-        "when": "Before every hangup.",
+        "description": "Logs a specific outcome and hangs up.",
+        "when": "When you need to log a specific outcome (booked, not_interested, wrong_number, etc).",
     },
 ]
 

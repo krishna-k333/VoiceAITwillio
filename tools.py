@@ -50,9 +50,10 @@ class AppointmentTools(llm.ToolContext):
     def build_tool_list(self, enabled: list) -> list:
         """Return tool methods filtered by the enabled list. Empty list = all enabled."""
         all_methods = [
-            self.check_availability, self.book_appointment, self.end_call,
-            self.transfer_to_human, self.send_sms_confirmation, self.lookup_contact,
-            self.remember_details, self.book_calcom, self.cancel_calcom,
+            self.check_availability, self.book_appointment, self.end_call, self.hangup,
+            self.transfer_to_human, self.send_sms_confirmation, self.send_email,
+            self.create_google_calendar_event,
+            self.lookup_contact, self.remember_details, self.book_calcom, self.cancel_calcom,
         ]
         if not enabled:
             return all_methods
@@ -81,7 +82,7 @@ class AppointmentTools(llm.ToolContext):
         Book an appointment after the lead has verbally confirmed date, time, and service.
         Call ONLY after the lead confirms all details.
         name: lead's full name | phone: with country code | date: YYYY-MM-DD | time: HH:MM | service: type
-        email: caller's email address — required for inbound calls (confirmation email)
+        email: caller's email address — if provided, sends confirmation email and creates Google Calendar event
         """
         try:
             booking_id = await insert_appointment(name, phone, date, time, service)
@@ -93,8 +94,8 @@ class AppointmentTools(llm.ToolContext):
         self._booking_completed = True
         self._last_booking_summary = f"appointment booked: {booking_id}"
 
-        # For inbound calls, also create Google Calendar event + send Gmail confirmation
-        if self.is_inbound and self.persona_data and email:
+        # Create Google Calendar event + send confirmation email when email is provided
+        if email and self.persona_data:
             google_note = await self._book_google(name, phone, email, service, date, time)
             if google_note:
                 result += f" {google_note}"
@@ -139,6 +140,38 @@ class AppointmentTools(llm.ToolContext):
             self._call_logged = True  # only mark logged after confirmed DB insert
         except Exception as exc:
             logger.error("Failed to log call in end_call(): %s — fallback will retry", exc)
+        try:
+            await self.ctx.room.disconnect()
+        except Exception:
+            pass
+        return "Call ended."
+
+    @llm.function_tool
+    async def hangup(self, reason: str = "") -> str:
+        """
+        Say goodbye and end the call. Use this whenever the conversation has
+        reached a natural ending — the caller got what they needed, they said
+        goodbye, they are not interested, or they asked to hang up.
+        This is simpler than end_call: you do not need to pick an outcome.
+        reason: a short note about how the call ended (optional).
+        """
+        if self._booking_completed:
+            outcome = "booked"
+            reason = reason or self._last_booking_summary or "call completed after booking"
+        else:
+            outcome = "completed"
+            reason = reason or "call completed"
+        duration = int(time.time() - self._call_start_time)
+        try:
+            await log_call(
+                phone_number=self.phone_number or "unknown",
+                lead_name=self.lead_name, outcome=outcome, reason=reason,
+                duration_seconds=duration, recording_url=self.recording_url,
+                ended_by="agent",
+            )
+            self._call_logged = True
+        except Exception as exc:
+            logger.error("Failed to log call in hangup(): %s — fallback will retry", exc)
         try:
             await self.ctx.room.disconnect()
         except Exception:
@@ -198,6 +231,62 @@ class AppointmentTools(llm.ToolContext):
             return f"SMS sent to {phone}."
         except Exception as exc:
             return "SMS delivery failed, but booking is confirmed."
+
+    @llm.function_tool
+    async def send_email(self, to_email: str, subject: str, headline: str, message: str) -> str:
+        """
+        Send a branded confirmation email. Uses the persona's theme colors automatically.
+        to_email: recipient email | subject: email subject line
+        headline: big text at the top (e.g. "Appointment Confirmed!")
+        message: the main body text
+        """
+        if not self.persona_data:
+            return "Email skipped: no persona data available."
+        try:
+            from inbound_google import is_configured, send_generic_email
+            if not is_configured():
+                return "Email skipped: Google OAuth not configured."
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: send_generic_email(
+                    persona_data=self.persona_data,
+                    to_email=to_email,
+                    subject=subject,
+                    headline=headline,
+                    greeting=message,
+                    details=[],
+                    note="",
+                    closing=f"Thank you! — {self.persona_data.get('name', 'Our Office')}",
+                ),
+            )
+            return f"Email sent to {to_email}."
+        except Exception as exc:
+            logger.warning("Email send failed: %s", exc)
+            return "Email delivery failed, but the appointment is confirmed."
+
+    @llm.function_tool
+    async def create_google_calendar_event(self, name: str, email: str, date: str, time: str, service: str, phone: str = "") -> str:
+        """
+        Create a Google Calendar event for an appointment. Call after book_appointment succeeds.
+        name: person's name | email: their email | date: YYYY-MM-DD | time: HH:MM | service: service type
+        phone: optional phone number
+        """
+        if not self.persona_data:
+            return "Calendar skipped: no persona data available."
+        try:
+            from inbound_google import is_configured, create_calendar_event
+            if not is_configured():
+                return "Calendar skipped: Google OAuth not configured. Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN."
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: create_calendar_event(self.persona_data, name, service, date, time, phone, email),
+            )
+            return f"Google Calendar event created for {name} on {date} at {time}."
+        except Exception as exc:
+            logger.warning("Google Calendar creation failed: %s", exc)
+            return "Calendar event creation failed, but the appointment is booked."
 
     @llm.function_tool
     async def lookup_contact(self, phone: str) -> str:

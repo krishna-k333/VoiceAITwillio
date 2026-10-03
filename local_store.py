@@ -46,10 +46,10 @@ def init_local_db() -> None:
                 enabled_tools TEXT NOT NULL DEFAULT '[]',
                 source TEXT NOT NULL DEFAULT 'manual',
                 source_ref TEXT NOT NULL DEFAULT '',
+                email_theme TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
-
             CREATE TABLE IF NOT EXISTS local_settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
@@ -57,11 +57,27 @@ def init_local_db() -> None:
             );
             """
         )
+        # Add email_theme column to existing databases that don't have it
+        try:
+            conn.execute("SELECT email_theme FROM personas LIMIT 1")
+        except Exception:
+            conn.execute("ALTER TABLE personas ADD COLUMN email_theme TEXT NOT NULL DEFAULT '{}'")
     print(f"Local persona database ready at {db_path()}")
 
 
 def _row(row: Optional[sqlite3.Row]) -> Optional[dict]:
-    return dict(row) if row else None
+    if not row:
+        return None
+    d = dict(row)
+    # Parse email_theme from JSON string to dict
+    if "email_theme" in d and isinstance(d["email_theme"], str):
+        try:
+            import json as _json
+            parsed = _json.loads(d["email_theme"])
+            d["email_theme"] = parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            d["email_theme"] = {}
+    return d
 
 
 def list_personas() -> list:
@@ -69,7 +85,7 @@ def list_personas() -> list:
         rows = conn.execute(
             "SELECT * FROM personas ORDER BY updated_at DESC"
         ).fetchall()
-    return [dict(r) for r in rows]
+    return [_row(r) for r in rows]
 
 
 def get_persona(persona_id: str) -> Optional[dict]:
@@ -92,13 +108,28 @@ def save_persona(
     enabled_tools: str = "[]",
     source: str = "manual",
     source_ref: str = "",
+    email_theme: Optional[str] = None,
     persona_id: Optional[str] = None,
 ) -> dict:
+    import json as _json
     if direction not in ("inbound", "outbound", "both"):
         direction = "both"
     if audio_mode not in ("gemini", "deepgram"):
         audio_mode = "gemini"
     now = datetime.now().isoformat(timespec="seconds")
+
+    # Assign theme if not provided
+    if not email_theme or email_theme == "{}":
+        try:
+            from inbound_google import assign_theme
+            theme = assign_theme(name)
+            email_theme = _json.dumps(theme)
+        except Exception:
+            # Fallback: assign a simple numbered theme
+            import hashlib as _hashlib
+            idx = int(_hashlib.md5(name.encode()).hexdigest(), 16) % 10
+            email_theme = _json.dumps({"name": f"Theme {idx}", "primary": "#1a73e8", "secondary": "#e8f0fe", "accent": "#174ea6", "header_bg": "linear-gradient(135deg, #1a73e8, #4285f4)"})
+
     with _connect() as conn:
         if persona_id:
             existing = conn.execute(
@@ -111,13 +142,13 @@ def save_persona(
                 UPDATE personas
                    SET name = ?, agent_name = ?, direction = ?, voice = ?, model = ?,
                        audio_mode = ?, system_prompt = ?, enabled_tools = ?,
-                       source = ?, source_ref = ?, updated_at = ?
+                       source = ?, source_ref = ?, email_theme = ?, updated_at = ?
                  WHERE id = ?
                 """,
                 (
                     name.strip(), agent_name.strip(), direction, voice.strip() or "Sulafat",
                     model.strip() or "gemini-3.1-flash-live-preview", audio_mode, system_prompt or "",
-                    enabled_tools or "[]", source or "manual", source_ref or "", now, persona_id,
+                    enabled_tools or "[]", source or "manual", source_ref or "", email_theme, now, persona_id,
                 ),
             )
         else:
@@ -126,14 +157,15 @@ def save_persona(
                 """
                 INSERT INTO personas (
                     id, name, agent_name, direction, voice, model, audio_mode,
-                    system_prompt, enabled_tools, source, source_ref, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    system_prompt, enabled_tools, source, source_ref, email_theme,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     persona_id, name.strip(), agent_name.strip(), direction,
                     voice.strip() or "Sulafat", model.strip() or "gemini-3.1-flash-live-preview",
                     audio_mode, system_prompt or "", enabled_tools or "[]",
-                    source or "manual", source_ref or "", now, now,
+                    source or "manual", source_ref or "", email_theme, now, now,
                 ),
             )
     persona = get_persona(persona_id)
