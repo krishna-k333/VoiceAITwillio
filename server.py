@@ -581,6 +581,7 @@ async def api_build_persona(req: PersonaBuildRequest):
         name=built["name"], agent_name=built["agent_name"], direction=built["direction"],
         voice=built["voice"], model=built["model"], audio_mode=built["audio_mode"],
         system_prompt=built["system_prompt"], source=built["source"], source_ref=built["source_ref"],
+        prompt_vars=built.get("prompt_vars") or {},
     )
     return persona
 

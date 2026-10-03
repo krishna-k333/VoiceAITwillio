@@ -1273,6 +1273,67 @@
       margin-bottom: 10px;
     }
 
+    /* System tool cards */
+    .sys-tool-card {
+      background: var(--white);
+      border: 1px solid var(--gray-200);
+      border-radius: var(--radius-sm);
+      padding: 13px 16px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .sys-tool-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: var(--yellow-pale);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      color: var(--dark);
+    }
+    .sys-tool-icon svg { width: 16px; height: 16px; }
+    .sys-tool-name { font-weight: 600; font-size: 0.88rem; }
+    .sys-tool-desc { font-size: 0.78rem; color: var(--text-2); margin-top: 2px; }
+    .sys-tool-badge {
+      font-size: 0.65rem;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 100px;
+      background: var(--green-bg);
+      color: var(--green);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      white-space: nowrap;
+    }
+
+    /* Tool checkbox grid */
+    .tool-cb-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .tool-cb-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 9px;
+      background: var(--gray-50);
+      border: 1.5px solid var(--gray-200);
+      border-radius: 10px;
+      padding: 9px 12px;
+      cursor: pointer;
+      transition: border-color .15s, background .15s;
+    }
+    .tool-cb-item:hover { border-color: var(--yellow); background: var(--yellow-pale); }
+    .tool-cb-item.checked { border-color: var(--yellow); background: var(--yellow-pale); }
+    .tool-cb-item input[type=checkbox] { margin-top: 2px; accent-color: var(--dark); }
+    .tool-cb-label { font-size: 0.82rem; font-weight: 600; line-height: 1.3; }
+    .tool-cb-sub { font-size: 0.71rem; color: var(--text-3); margin-top: 1px; }
+
     .btn-sm {
       padding: 5px 10px !important;
       font-size: 0.8rem !important;
@@ -1841,10 +1902,10 @@
                   <option value="gemini-2.5-flash-native-audio-preview-12-2025">Gemini 2.5 Flash (Native Audio)</option>
                 </select>
               </div>
-              <div class="form-group">
-                <label>Enabled Tools <span class="text-muted text-sm">comma-separated, e.g.
-                    check_availability,book_appointment</span></label>
-                <input type="text" id="agent-tools" placeholder="Leave empty for all tools" />
+              <div class="form-group" style="grid-column:1/-1">
+                <label>Enabled Tools <span class="text-muted text-sm">Check the tools this agent profile can use. Uncheck all = all tools enabled.</span></label>
+                <div class="tool-cb-grid" id="agent-tools-grid"><span class="text-muted text-sm">Loading tools…</span></div>
+                <input type="hidden" id="agent-tools" />
               </div>
             </div>
             <div class="form-group mt8"><label>System Prompt</label><textarea id="agent-prompt" rows="8"></textarea>
@@ -1870,17 +1931,134 @@
           </div>
         </div>
 
-        <!-- ═══ TOOLS TAB (HTTP integrations) ═══ -->
+        <!-- ═══ TOOLS TAB (HTTP integrations + system tools) ═══ -->
         <div id="tab-http-tools" class="tab-panel">
           <div class="page-header">
-            <div class="page-title">Tools · HTTP Integrations</div>
-            <div class="page-sub">Add your own API endpoints that the voice agent can call during live calls. Each tool
-              is listed in the {{tools}} section of the prompt, and the agent invokes it by name through http_request.</div>
+            <div class="page-title">Tools</div>
+            <div class="page-sub">All tools available to the voice agent — system built-ins and your custom HTTP integrations. Select which tools each persona uses from the Personas tab.</div>
           </div>
 
           <div style="max-width:980px">
+
+            <!-- System default tools (read-only) -->
             <div class="card mt8">
-              <h2>Add / Edit HTTP Tool</h2>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+                <h2 style="margin-bottom:0">System Built-in Tools</h2>
+                <span style="font-size:0.78rem;color:var(--text-3)">Always available · Cannot be deleted</span>
+              </div>
+              <div id="sys-tools-list">
+                <!-- rendered by JS -->
+                <div class="sys-tool-card">
+                  <div class="sys-tool-icon"><i data-lucide="calendar-check"></i></div>
+                  <div style="flex:1">
+                    <div class="sys-tool-name">check_availability</div>
+                    <div class="sys-tool-desc">Check whether a date/time slot is open before booking</div>
+                  </div>
+                  <span class="sys-tool-badge">built-in</span>
+                </div>
+                <div class="sys-tool-card">
+                  <div class="sys-tool-icon"><i data-lucide="calendar-plus"></i></div>
+                  <div style="flex:1">
+                    <div class="sys-tool-name">book_appointment</div>
+                    <div class="sys-tool-desc">Book an appointment after the lead confirms date, time &amp; service</div>
+                  </div>
+                  <span class="sys-tool-badge">built-in</span>
+                </div>
+                <div class="sys-tool-card">
+                  <div class="sys-tool-icon"><i data-lucide="phone-off"></i></div>
+                  <div style="flex:1">
+                    <div class="sys-tool-name">hangup</div>
+                    <div class="sys-tool-desc">Say goodbye and end the call gracefully</div>
+                  </div>
+                  <span class="sys-tool-badge">built-in</span>
+                </div>
+                <div class="sys-tool-card">
+                  <div class="sys-tool-icon"><i data-lucide="phone-forwarded"></i></div>
+                  <div style="flex:1">
+                    <div class="sys-tool-name">transfer_to_human</div>
+                    <div class="sys-tool-desc">Transfer call to a human agent via SIP REFER</div>
+                  </div>
+                  <span class="sys-tool-badge">built-in</span>
+                </div>
+                <div class="sys-tool-card">
+                  <div class="sys-tool-icon"><i data-lucide="message-square"></i></div>
+                  <div style="flex:1">
+                    <div class="sys-tool-name">send_sms_confirmation</div>
+                    <div class="sys-tool-desc">Send SMS confirmation after a booking (requires Twilio)</div>
+                  </div>
+                  <span class="sys-tool-badge">built-in</span>
+                </div>
+                <div class="sys-tool-card">
+                  <div class="sys-tool-icon"><i data-lucide="mail"></i></div>
+                  <div style="flex:1">
+                    <div class="sys-tool-name">send_email</div>
+                    <div class="sys-tool-desc">Send a branded confirmation email via Gmail (requires Google OAuth)</div>
+                  </div>
+                  <span class="sys-tool-badge">built-in</span>
+                </div>
+                <div class="sys-tool-card">
+                  <div class="sys-tool-icon"><i data-lucide="calendar"></i></div>
+                  <div style="flex:1">
+                    <div class="sys-tool-name">create_google_calendar_event</div>
+                    <div class="sys-tool-desc">Create a Google Calendar event after booking (requires Google OAuth)</div>
+                  </div>
+                  <span class="sys-tool-badge">built-in</span>
+                </div>
+                <div class="sys-tool-card">
+                  <div class="sys-tool-icon"><i data-lucide="search"></i></div>
+                  <div style="flex:1">
+                    <div class="sys-tool-name">lookup_contact</div>
+                    <div class="sys-tool-desc">Look up contact history, past calls &amp; appointments at call start</div>
+                  </div>
+                  <span class="sys-tool-badge">built-in</span>
+                </div>
+                <div class="sys-tool-card">
+                  <div class="sys-tool-icon"><i data-lucide="brain"></i></div>
+                  <div style="flex:1">
+                    <div class="sys-tool-name">remember_details</div>
+                    <div class="sys-tool-desc">Store a key insight about the lead for future calls</div>
+                  </div>
+                  <span class="sys-tool-badge">built-in</span>
+                </div>
+                <div class="sys-tool-card">
+                  <div class="sys-tool-icon"><i data-lucide="calendar-clock"></i></div>
+                  <div style="flex:1">
+                    <div class="sys-tool-name">book_calcom</div>
+                    <div class="sys-tool-desc">Book in Cal.com calendar (requires CALCOM_API_KEY)</div>
+                  </div>
+                  <span class="sys-tool-badge">built-in</span>
+                </div>
+                <div class="sys-tool-card">
+                  <div class="sys-tool-icon"><i data-lucide="calendar-x"></i></div>
+                  <div style="flex:1">
+                    <div class="sys-tool-name">cancel_calcom</div>
+                    <div class="sys-tool-desc">Cancel a Cal.com booking by UID</div>
+                  </div>
+                  <span class="sys-tool-badge">built-in</span>
+                </div>
+                <div class="sys-tool-card">
+                  <div class="sys-tool-icon"><i data-lucide="globe"></i></div>
+                  <div style="flex:1">
+                    <div class="sys-tool-name">http_request</div>
+                    <div class="sys-tool-desc">Call a user-configured HTTP integration by name (see custom tools below)</div>
+                  </div>
+                  <span class="sys-tool-badge">built-in</span>
+                </div>
+                <div class="sys-tool-card">
+                  <div class="sys-tool-icon"><i data-lucide="phone-missed"></i></div>
+                  <div style="flex:1">
+                    <div class="sys-tool-name">end_call</div>
+                    <div class="sys-tool-desc">End the call and log outcome (booked / not_interested / voicemail etc.)</div>
+                  </div>
+                  <span class="sys-tool-badge">built-in</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Add / Edit custom HTTP tool -->
+            <div class="card mt16">
+              <h2 id="ht-form-title">Add Custom HTTP Tool</h2>
+              <p class="text-muted text-sm" style="margin-top:4px;margin-bottom:14px">Connect your own API endpoints. The agent calls them by name through <code style="background:var(--gray-100);padding:1px 5px;border-radius:4px">http_request</code>.</p>
               <div class="grid2 mt8">
                 <div class="form-group"><label>Tool Name</label>
                   <input id="ht-name" placeholder="e.g. lookup_customer, book_slot" />
@@ -1913,18 +2091,20 @@
                 <div class="form-group"><label>Timeout (seconds)</label>
                   <input id="ht-timeout" type="number" value="10" />
                 </div>
-                <div class="form-group"><label>Enabled</label>
-                  <input type="checkbox" id="ht-enabled" checked />
-                </div>
+                <div class="form-group"><label style="cursor:pointer;display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="ht-enabled" checked /> Enabled</label></div>
               </div>
               <div class="flex gap8 mt16">
-                <button class="btn-primary" onclick="saveHttpTool()"><i data-lucide="save"></i> Save Tool</button>
+                <button class="btn-primary" onclick="saveHttpTool()"><i data-lucide="save"></i> <span id="ht-save-btn-label">Save Tool</span></button>
                 <button class="btn" onclick="clearHttpForm()">Clear</button>
               </div>
             </div>
 
+            <!-- Configured custom HTTP tools -->
             <div class="card mt16">
-              <h2>Configured HTTP Tools</h2>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+                <h2 style="margin-bottom:0">Custom HTTP Tools</h2>
+                <span id="ht-custom-count" style="font-size:0.78rem;color:var(--text-3)"></span>
+              </div>
               <div id="http-tools-list" class="mt8"><span class="text-muted">Loading…</span></div>
             </div>
           </div>
@@ -2493,7 +2673,15 @@
               <button type="button" class="btn btn-sm" onclick="previewPersonaPrompt()">Preview prompt</button>
               <span class="text-sm text-muted" id="persona-vars-hint"></span>
             </div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap">
+
+            <!-- Tool selection for persona -->
+            <div class="form-group" style="margin-top:16px">
+              <label>Tools for this persona <span class="text-muted text-sm">Select which tools the agent can use. Uncheck all = all tools enabled.</span></label>
+              <div class="tool-cb-grid" id="persona-tools-grid"><span class="text-muted text-sm">Loading tools…</span></div>
+              <input type="hidden" id="persona-enabled-tools" value="[]" />
+            </div>
+
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
               <button type="button" class="btn-primary" onclick="savePersonaForm()">Save persona</button>
               <button type="button" class="btn-muted" id="persona-cancel" style="display:none"
                 onclick="resetPersonaForm()">Cancel edit</button>
@@ -2748,10 +2936,10 @@
       else if (name === 'settings') loadSettings();
       else if (name === 'http-tools') loadHttpTools();
       else if (name === 'campaigns') loadCampaigns();
-      else if (name === 'agents') loadAgentProfiles();
+      else if (name === 'agents') { loadAgentProfiles(); initAgentToolsGrid(); }
       else if (name === 'logs') loadLogs();
       else if (name === 'inbound-overview') { loadPersonas(); loadInboundStatus(); }
-      else if (name === 'personas') loadPersonas();
+      else if (name === 'personas') { loadPersonas(); if (!_httpTools.length) loadHttpTools().then(() => renderToolCheckboxGrid('persona-tools-grid', [])); else renderToolCheckboxGrid('persona-tools-grid', []); }
       else if (name === 'inbound-setup') loadInboundStatus();
       lucide.createIcons();
     }
@@ -3082,12 +3270,13 @@
 
     window.saveAgentProfile = async () => {
       const id = $('agent-edit-id').value;
+      const checkedTools = collectCheckedTools('agent-tools-grid');
       const body = {
         name: $('agent-name').value.trim(),
         voice: $('agent-voice').value,
         model: $('agent-model').value,
         system_prompt: $('agent-prompt').value,
-        enabled_tools: $('agent-tools').value.trim() ? JSON.stringify($('agent-tools').value.split(',').map(s => s.trim()).filter(Boolean)) : '[]',
+        enabled_tools: JSON.stringify(checkedTools),
         is_default: $('agent-is-default').checked,
       };
       if (!body.name) return toast('Profile name is required', 'err');
@@ -3106,6 +3295,8 @@
 
     window.editAgentProfile = async (id) => {
       try {
+        // Make sure tools are loaded first
+        if (!_httpTools.length) { try { _httpTools = await api('/api/http-tools'); } catch(_) {} }
         const p = await api(`/api/agent-profiles/${id}`);
         $('agent-edit-id').value = p.id;
         $('agent-form-title').textContent = 'Edit Agent Profile';
@@ -3116,9 +3307,12 @@
           : 'gemini-3.1-flash-live-preview';
         $('agent-model').value = savedModel;
         $('agent-prompt').value = p.system_prompt || '';
-        try { $('agent-tools').value = JSON.parse(p.enabled_tools || '[]').join(', '); } catch (e) { $('agent-tools').value = ''; }
+        let enabledArr = [];
+        try { enabledArr = JSON.parse(p.enabled_tools || '[]'); } catch (_) {}
+        renderToolCheckboxGrid('agent-tools-grid', enabledArr);
         $('agent-is-default').checked = !!p.is_default;
         $('agent-cancel-btn').classList.remove('hidden');
+        $('agent-form-title').scrollIntoView({ behavior: 'smooth', block: 'start' });
       } catch (e) { toast('Failed to load profile', 'err'); }
     };
 
@@ -3140,20 +3334,45 @@
       $('agent-voice').value = 'Aoede';
       $('agent-model').value = 'gemini-3.1-flash-live-preview';
       $('agent-prompt').value = '';
-      $('agent-tools').value = '';
+      renderToolCheckboxGrid('agent-tools-grid', []);
       $('agent-is-default').checked = false;
       $('agent-cancel-btn').classList.add('hidden');
     };
 
+    // Initialize agent tools grid when its tab loads
+    async function initAgentToolsGrid() {
+      if (!_httpTools.length) { try { _httpTools = await api('/api/http-tools'); } catch(_) {} }
+      renderToolCheckboxGrid('agent-tools-grid', []);
+    }
+
     // ═══════════════════════════════════════════════════════════════════
-    // TOOLS · HTTP INTEGRATIONS
+    // TOOLS · HTTP INTEGRATIONS + SYSTEM TOOLS
     // ═══════════════════════════════════════════════════════════════════
     let _httpTools = [];
+
+    // All system (built-in) tools with display metadata
+    const SYSTEM_TOOLS = [
+      { name: 'check_availability',         desc: 'Check if a date/time slot is open before booking',              icon: 'calendar-check' },
+      { name: 'book_appointment',            desc: 'Book an appointment after the lead confirms details',            icon: 'calendar-plus' },
+      { name: 'hangup',                      desc: 'Say goodbye and end the call gracefully',                        icon: 'phone-off' },
+      { name: 'end_call',                    desc: 'End the call and log outcome (booked / not_interested etc.)',    icon: 'phone-missed' },
+      { name: 'transfer_to_human',           desc: 'Transfer call to a human agent via SIP REFER',                  icon: 'phone-forwarded' },
+      { name: 'send_sms_confirmation',       desc: 'Send SMS confirmation after booking (Twilio)',                   icon: 'message-square' },
+      { name: 'send_email',                  desc: 'Send a branded confirmation email via Gmail',                    icon: 'mail' },
+      { name: 'create_google_calendar_event',desc: 'Create a Google Calendar event after booking',                   icon: 'calendar' },
+      { name: 'lookup_contact',              desc: 'Look up contact history, past calls & appointments',             icon: 'search' },
+      { name: 'remember_details',            desc: 'Store a key insight about the lead for future calls',            icon: 'brain' },
+      { name: 'book_calcom',                 desc: 'Book in Cal.com calendar (CALCOM_API_KEY required)',              icon: 'calendar-clock' },
+      { name: 'cancel_calcom',               desc: 'Cancel a Cal.com booking by UID',                               icon: 'calendar-x' },
+      { name: 'http_request',                desc: 'Call a custom HTTP integration by name',                        icon: 'globe' },
+    ];
 
     async function loadHttpTools() {
       try {
         _httpTools = await api('/api/http-tools');
         renderHttpTools();
+        // Refresh tool checkboxes on both forms whenever tools change
+        refreshToolCheckboxes();
       } catch (e) {
         $('http-tools-list').innerHTML = '<span class="text-muted">Could not load tools.</span>';
       }
@@ -3161,10 +3380,13 @@
 
     function renderHttpTools() {
       const el = $('http-tools-list');
+      const countEl = $('ht-custom-count');
       if (!_httpTools.length) {
-        el.innerHTML = '<span class="text-muted">No HTTP tools configured yet. Add one below to expose a custom API to your agents.</span>';
+        el.innerHTML = '<span class="text-muted text-sm">No custom HTTP tools yet. Add one above to expose your own API to the agent.</span>';
+        if (countEl) countEl.textContent = '0 tools';
         return;
       }
+      if (countEl) countEl.textContent = `${_httpTools.length} tool${_httpTools.length !== 1 ? 's' : ''}`;
       el.innerHTML = _httpTools.map(t => {
         const enabled = t.enabled ? 'badge-ok' : 'badge-muted';
         const method = (t.method || 'GET').toUpperCase();
@@ -3175,15 +3397,72 @@
               <span class="badge ${enabled}">${t.enabled ? 'active' : 'disabled'}</span>
             </div>
             <div class="flex gap8">
-              <button class="btn btn-sm" onclick="editHttpTool('${esc(t.id)}')">Edit</button>
-              <button class="btn-warn btn-sm" onclick="deleteHttpTool('${esc(t.id)}')">Delete</button>
+              <button class="btn btn-sm" onclick="editHttpTool('${esc(t.id)}')"><i data-lucide="pencil" style="width:12px;height:12px"></i> Edit</button>
+              <button class="btn-danger btn-sm" onclick="deleteHttpTool('${esc(t.id)}')"><i data-lucide="trash-2" style="width:12px;height:12px"></i> Delete</button>
             </div>
           </div>
-          <div class="text-sm text-muted mt4">${method} — ${esc(t.url || '')}</div>
+          <div class="text-sm text-muted mt4">${method} · ${esc(t.url || '')}</div>
           <div class="text-sm mt4">${esc(t.description || '')}</div>
         </div>`;
       }).join('');
       lucide.createIcons();
+    }
+
+    /** Build the full list of tool names (system + custom HTTP names) */
+    function allAvailableTools() {
+      const sys = SYSTEM_TOOLS.map(t => ({ name: t.name, desc: t.desc, type: 'system' }));
+      const custom = _httpTools.map(t => ({ name: t.name, desc: t.description || '', type: 'custom' }));
+      return [...sys, ...custom];
+    }
+
+    /** Render a checkbox grid into containerId, pre-checking tools listed in enabledArr */
+    function renderToolCheckboxGrid(containerId, enabledArr) {
+      const el = $(containerId);
+      if (!el) return;
+      const tools = allAvailableTools();
+      const enabledSet = new Set(enabledArr || []);
+      el.innerHTML = tools.map(t => {
+        const checked = enabledArr && enabledArr.length && enabledSet.has(t.name);
+        const typeLabel = t.type === 'custom' ? ' · custom' : '';
+        return `<label class="tool-cb-item${checked ? ' checked' : ''}" onclick="toggleToolCb(this)">
+          <input type="checkbox" value="${esc(t.name)}" ${checked ? 'checked' : ''}>
+          <div>
+            <div class="tool-cb-label">${esc(t.name)}</div>
+            <div class="tool-cb-sub">${esc(t.desc)}${typeLabel}</div>
+          </div>
+        </label>`;
+      }).join('');
+    }
+
+    window.toggleToolCb = (label) => {
+      label.classList.toggle('checked', label.querySelector('input').checked);
+    };
+
+    /** Collect checked tool names from a grid container */
+    function collectCheckedTools(containerId) {
+      const el = $(containerId);
+      if (!el) return [];
+      return [...el.querySelectorAll('input[type=checkbox]:checked')].map(cb => cb.value);
+    }
+
+    /** Refresh both agent-tools-grid and persona-tools-grid without losing current checked state */
+    function refreshToolCheckboxes() {
+      // Agent profiles grid — preserve current selection
+      const agGrid = $('agent-tools-grid');
+      if (agGrid && agGrid.querySelector('input[type=checkbox]')) {
+        const cur = collectCheckedTools('agent-tools-grid');
+        renderToolCheckboxGrid('agent-tools-grid', cur);
+      } else if (agGrid) {
+        renderToolCheckboxGrid('agent-tools-grid', []);
+      }
+      // Persona tools grid — preserve current selection
+      const pGrid = $('persona-tools-grid');
+      if (pGrid && pGrid.querySelector('input[type=checkbox]')) {
+        const cur = collectCheckedTools('persona-tools-grid');
+        renderToolCheckboxGrid('persona-tools-grid', cur);
+      } else if (pGrid) {
+        renderToolCheckboxGrid('persona-tools-grid', []);
+      }
     }
 
     function esc(s) { return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
@@ -3191,6 +3470,8 @@
     window.editHttpTool = async (id) => {
       const t = _httpTools.find(x => x.id === id);
       if (!t) { toast('Tool not found', 'err'); return; }
+      $('ht-form-title').textContent = 'Edit Custom HTTP Tool';
+      $('ht-save-btn-label').textContent = 'Update Tool';
       $('ht-name').value = t.name || '';
       $('ht-method').value = (t.method || 'GET').toUpperCase();
       $('ht-desc').value = t.description || '';
@@ -3200,11 +3481,14 @@
       $('ht-timeout').value = t.timeout || 10;
       $('ht-enabled').checked = !!t.enabled;
       $('ht-name').dataset.editId = t.id;
-      window.scrollTo(0, 0);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
     window.clearHttpForm = () => {
-      ['ht-name', 'ht-method', 'ht-desc', 'ht-url', 'ht-headers', 'ht-body'].forEach(id => { const el = $(id); if (el.tagName === 'SELECT') el.value = 'GET'; else el.value = ''; });
+      $('ht-form-title').textContent = 'Add Custom HTTP Tool';
+      $('ht-save-btn-label').textContent = 'Save Tool';
+      ['ht-name', 'ht-desc', 'ht-url', 'ht-headers', 'ht-body'].forEach(id => { $(id).value = ''; });
+      $('ht-method').value = 'GET';
       $('ht-timeout').value = 10;
       $('ht-enabled').checked = true;
       $('ht-name').dataset.editId = '';
@@ -3227,7 +3511,7 @@
     };
 
     window.deleteHttpTool = async (id) => {
-      if (!confirm('Delete this HTTP tool?')) return;
+      if (!confirm('Delete this custom HTTP tool?')) return;
       try { await apiDel('/api/http-tools/' + id); toast('Tool deleted'); loadHttpTools(); }
       catch (e) { toast('Failed to delete', 'err'); }
     };
@@ -3625,6 +3909,8 @@
       $('persona-vars').value = '';
       $('persona-vars-hint').textContent = '';
       $('persona-cancel').style.display = 'none';
+      $('persona-enabled-tools').value = '[]';
+      renderToolCheckboxGrid('persona-tools-grid', []);
     }
 
     function editPersona(id) {
@@ -3641,6 +3927,11 @@
       $('persona-vars').value = p.prompt_vars && Object.keys(p.prompt_vars).length ? JSON.stringify(p.prompt_vars, null, 2) : '';
       $('persona-vars-hint').textContent = '';
       $('persona-cancel').style.display = '';
+      // Load enabled tools checkboxes
+      let enabledArr = [];
+      try { enabledArr = typeof p.enabled_tools === 'string' ? JSON.parse(p.enabled_tools || '[]') : (p.enabled_tools || []); } catch(_) {}
+      renderToolCheckboxGrid('persona-tools-grid', enabledArr);
+      $('persona-enabled-tools').value = JSON.stringify(enabledArr);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
@@ -3665,6 +3956,7 @@
         try { promptVars = JSON.parse($('persona-vars').value); }
         catch (e) { toast('Prompt variables must be valid JSON', 'err'); return; }
       }
+      const checkedTools = collectCheckedTools('persona-tools-grid');
       const body = {
         name: $('persona-name').value.trim(),
         agent_name: $('persona-agent-name').value.trim(),
@@ -3674,6 +3966,7 @@
         audio_mode: $('persona-audio').value,
         system_prompt: $('persona-prompt').value,
         prompt_vars: promptVars,
+        enabled_tools: JSON.stringify(checkedTools),
         source: (id && ((_personaState.personas || []).find(p => p.id === id) || {}).source) || 'manual',
         source_ref: (id && ((_personaState.personas || []).find(p => p.id === id) || {}).source_ref) || '',
       };
@@ -3731,7 +4024,23 @@
       if (!target) { toast('Paste a website, Maps link, or business name', 'err'); return; }
       const btn = $('persona-build-btn');
       btn.disabled = true;
-      btn.textContent = 'Building… this can take a minute';
+
+      // Animated progress messages so user knows it's still working (takes 1-3 min)
+      const steps = [
+        'Scraping the website…',
+        'Reading the content…',
+        'Generating call script…',
+        'Writing objection handlers…',
+        'Almost done…',
+      ];
+      let stepIdx = 0;
+      btn.textContent = steps[0];
+      const ticker = setInterval(() => {
+        stepIdx = (stepIdx + 1) % steps.length;
+        if (!btn.disabled) { clearInterval(ticker); return; }
+        btn.textContent = steps[stepIdx];
+      }, 18000); // rotate every 18 seconds
+
       try {
         const r = await fetch('/api/personas/build', {
           method: 'POST',
@@ -3744,15 +4053,23 @@
             save: true,
           }),
         });
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(data.detail || 'Build failed');
-        toast(data.source === 'website' ? 'Built from the website' : 'Built from Google Maps');
+        let data = {};
+        try { data = await r.json(); } catch (_) {}
+        if (!r.ok) {
+          const msg = data.detail || `Server returned ${r.status}`;
+          throw new Error(msg);
+        }
+        toast(data.source === 'website' ? '✓ Built from the website' : '✓ Built from Google Maps');
         $('persona-target').value = '';
         await loadPersonas();
-        editPersona(data.id);
+        if (data.id) editPersona(data.id);
       } catch (e) {
-        toast(e.message === 'Failed to fetch' ? 'The app is not answering. Restart it, then build again.' : (e.message || 'Build failed'), 'err');
+        const msg = e.message === 'Failed to fetch'
+          ? 'Network error — is the server running? Restart it, then try again.'
+          : (e.message || 'Build failed');
+        toast(msg, 'err');
       } finally {
+        clearInterval(ticker);
         btn.disabled = false;
         btn.textContent = 'Build and save';
       }

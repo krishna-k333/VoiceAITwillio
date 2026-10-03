@@ -48,11 +48,14 @@ async def _run_actor(actor: str, payload: dict, timeout_s: int = 150, memory: in
     token = apify_token()
     if not token:
         raise RuntimeError("APIFY_TOKEN is not set. Add it to .env and restart the server.")
-    async with httpx.AsyncClient(timeout=60) as client:
+    # Use no client-level timeout; individual requests get their own timeouts.
+    # The polling loop can run for timeout_s seconds so a short client timeout would abort it.
+    async with httpx.AsyncClient(timeout=None) as client:
         started = await client.post(
             f"https://api.apify.com/v2/acts/{actor}/runs",
             params={"token": token, "memory": memory, "timeout": timeout_s},
             json=payload,
+            timeout=30,  # just the initial POST
         )
         if started.status_code >= 400:
             detail = started.text[:400]
@@ -65,15 +68,20 @@ async def _run_actor(actor: str, payload: dict, timeout_s: int = 150, memory: in
         # waitForFinish on Apify caps at 60s, so poll instead.
         deadline = time.time() + timeout_s
         while status not in ("SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT") and time.time() < deadline:
-            await asyncio.sleep(3)
-            check = await client.get(
-                f"https://api.apify.com/v2/actor-runs/{run_id}",
-                params={"token": token},
-            )
-            check.raise_for_status()
-            body = check.json()["data"]
-            status = body.get("status")
-            dataset_id = body.get("defaultDatasetId") or dataset_id
+            await asyncio.sleep(5)
+            try:
+                check = await client.get(
+                    f"https://api.apify.com/v2/actor-runs/{run_id}",
+                    params={"token": token},
+                    timeout=15,
+                )
+                check.raise_for_status()
+                body = check.json()["data"]
+                status = body.get("status")
+                dataset_id = body.get("defaultDatasetId") or dataset_id
+                logger.info("Apify %s polling — status=%s", actor, status)
+            except Exception as poll_exc:
+                logger.warning("Apify poll error (will retry): %s", poll_exc)
         if status != "SUCCEEDED":
             raise RuntimeError(f"Apify {actor} finished as {status or 'timeout'}")
         if not dataset_id:
@@ -81,6 +89,7 @@ async def _run_actor(actor: str, payload: dict, timeout_s: int = 150, memory: in
         items = await client.get(
             f"https://api.apify.com/v2/datasets/{dataset_id}/items",
             params={"token": token, "clean": "true", "limit": 12},
+            timeout=30,
         )
         items.raise_for_status()
         data = items.json()
