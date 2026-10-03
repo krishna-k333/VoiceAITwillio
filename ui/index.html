@@ -1099,60 +1099,62 @@ tbody tr:hover td { background: var(--gray-50); }
       <div id="tab-single" class="tab-panel">
         <div class="page-header">
           <div class="page-title">Single Call</div>
-          <div class="page-sub">Dispatch an AI call to a single number immediately.</div>
+          <div class="page-sub">Places the call as whichever persona is fixed for outbound. Voice, name, and the full script come from that persona.</div>
         </div>
-        <div style="max-width:560px">
+        <div style="max-width:760px">
           <div class="card">
             <h2>Call Details</h2>
             <form id="call-form" onsubmit="submitCall(event)">
               <div class="form-group"><label>Phone Number (E.164)</label><input type="text" id="f-phone" placeholder="+919876543210" required /></div>
               <div class="form-group"><label>Lead Name</label><input type="text" id="f-name" placeholder="Full name" /></div>
-              <div class="form-group"><label>Caller persona</label>
-                <select id="f-persona"><option value="">— Active outbound persona —</option></select>
+              <div class="agent-form-grid">
+                <div class="form-group"><label>Persona for this call</label>
+                  <select id="f-persona" onchange="renderSingleCallPersona()"><option value="">Outbound persona (fixed now)</option></select>
+                </div>
+                <div class="form-group"><label>SIP Provider</label><select id="f-sip-provider"><option value="vobiz">Vobiz</option><option value="voicelink">VoiceLink</option><option value="telnyx">Telnyx</option><option value="twilio">Twilio</option></select></div>
               </div>
 
-              <!-- Collapse toggle -->
-              <button type="button" id="f-details-toggle" onclick="toggleCallDetails()" style="background:none;border:1px solid var(--border);border-radius:6px;padding:6px 12px;cursor:pointer;font-size:13px;color:var(--text-muted);display:flex;align-items:center;gap:6px;margin-bottom:12px">
-                <span id="f-details-arrow">▾</span> Call Details
-              </button>
+              <div id="f-outbound-card" style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:14px">
+                <div id="f-outbound-summary"><span class="text-muted text-sm">Loading the outbound persona…</span></div>
+                <pre id="f-outbound-prompt" style="max-height:320px;overflow:auto;white-space:pre-wrap;font-size:12px;line-height:1.45;margin:10px 0 0;padding:10px;border-radius:6px;background:var(--surface-2);border:1px solid var(--border)"></pre>
+              </div>
 
-              <div id="f-details-body">
+              <div id="f-script-fields" style="display:none">
+                <p class="text-muted text-sm">No outbound persona is fixed, so this call uses the built-in real-estate script. Leave a field blank to keep its default. Fix a persona under Personas and this form will follow that persona instead.</p>
                 <div class="agent-form-grid">
-                  <div class="form-group"><label>Agent Name</label><input type="text" id="f-agent-name" value="Priya" /></div>
-                  <div class="form-group"><label>Business Name</label><input type="text" id="f-biz" value="Green Valley Builders" /></div>
+                  <div class="form-group"><label>Agent Name</label><input type="text" id="f-agent-name" placeholder="Priya" /></div>
+                  <div class="form-group"><label>Business Name</label><input type="text" id="f-biz" placeholder="Business name" /></div>
                 </div>
                 <div class="agent-form-grid">
-                  <div class="form-group"><label>Service Type</label><input type="text" id="f-service" value="site visit" /></div>
-                  <div class="form-group"><label>Project Type</label><input type="text" id="f-project-type" value="township" /></div>
+                  <div class="form-group"><label>Service Type</label><input type="text" id="f-service" placeholder="site visit" /></div>
+                  <div class="form-group"><label>Project Type</label><input type="text" id="f-project-type" placeholder="township" /></div>
                 </div>
                 <div class="agent-form-grid">
-                  <div class="form-group"><label>Project Name</label><input type="text" id="f-project-name" value="Green Valley Township" /></div>
-                  <div class="form-group"><label>Project Location</label><input type="text" id="f-project-location" value="Nagpur Ring Road" /></div>
+                  <div class="form-group"><label>Project Name</label><input type="text" id="f-project-name" placeholder="Project name" /></div>
+                  <div class="form-group"><label>Project Location</label><input type="text" id="f-project-location" placeholder="Location" /></div>
                 </div>
                 <div class="agent-form-grid">
-                  <div class="form-group"><label>Project Status</label><input type="text" id="f-project-status" value="soft launch" /></div>
+                  <div class="form-group"><label>Project Status</label><input type="text" id="f-project-status" placeholder="soft launch" /></div>
                   <div class="form-group" style="display:flex;gap:8px">
-                    <div style="flex:1"><label>Site Visit Day 1</label><input type="text" id="f-sv-day1" value="is Saturday" /></div>
-                    <div style="flex:1"><label>Site Visit Day 2</label><input type="text" id="f-sv-day2" value="is Sunday" /></div>
+                    <div style="flex:1"><label>Site Visit Day 1</label><input type="text" id="f-sv-day1" placeholder="is Saturday" /></div>
+                    <div style="flex:1"><label>Site Visit Day 2</label><input type="text" id="f-sv-day2" placeholder="is Sunday" /></div>
                   </div>
                 </div>
-                <div class="form-group"><label>Key Benefit 1</label><input type="text" id="f-benefit-1" value="Nagpur Ring Road pe prime location hai, future growth pakka hai" /></div>
-                <div class="form-group"><label>Key Benefit 2</label><input type="text" id="f-benefit-2" value="18 mahine mein 30% appreciation expected hai, investors ke liye best option" /></div>
-                <div class="form-group"><label>Key Benefit 3</label><input type="text" id="f-benefit-3" value="pre-launch pricing sirf is week tak available hai, baad mein rate badh jaayega" /></div>
-                <div class="agent-form-grid">
-                  <div class="form-group"><label>Agent Profile</label><select id="f-agent-profile"><option value="">— Default —</option></select></div>
-                  <div class="form-group"><label>SIP Provider</label><select id="f-sip-provider"><option value="vobiz">Vobiz</option><option value="voicelink">VoiceLink</option><option value="telnyx">Telnyx</option><option value="twilio">Twilio</option></select></div>
-                </div>
-                <div class="form-group">
-                  <label style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:500">
-                    <input type="checkbox" id="f-custom-prompt-toggle" onchange="document.getElementById('f-custom-prompt-group').classList.toggle('hidden',!this.checked)" />
-                    Override system prompt for this call
-                  </label>
-                </div>
-                <div class="form-group hidden" id="f-custom-prompt-group">
-                  <label>Custom System Prompt</label>
-                  <textarea id="f-custom-prompt" placeholder="Custom system prompt…" rows="6"></textarea>
-                </div>
+                <div class="form-group"><label>Key Benefit 1</label><input type="text" id="f-benefit-1" placeholder="One benefit, in the words the agent should say" /></div>
+                <div class="form-group"><label>Key Benefit 2</label><input type="text" id="f-benefit-2" placeholder="Second benefit" /></div>
+                <div class="form-group"><label>Key Benefit 3</label><input type="text" id="f-benefit-3" placeholder="Third benefit" /></div>
+                <div class="form-group"><label>Agent Profile</label><select id="f-agent-profile"><option value="">— Default —</option></select></div>
+              </div>
+
+              <div class="form-group">
+                <label style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:500">
+                  <input type="checkbox" id="f-custom-prompt-toggle" onchange="document.getElementById('f-custom-prompt-group').classList.toggle('hidden',!this.checked)" />
+                  Override the script for this call only
+                </label>
+              </div>
+              <div class="form-group hidden" id="f-custom-prompt-group">
+                <label>Script for this call</label>
+                <textarea id="f-custom-prompt" placeholder="Full script: who the agent is, the exact first line, the call flow, objections, and the facts it may say." rows="12"></textarea>
               </div>
 
               <button type="submit" class="btn-primary"><i data-lucide="phone"></i> Place Call</button>
@@ -1734,7 +1736,7 @@ tbody tr:hover td { background: var(--gray-50); }
             </select>
           </div>
           <div class="form-group"><label>Full prompt</label>
-            <textarea id="persona-prompt" rows="12" placeholder="Write the whole system prompt here."></textarea>
+            <textarea id="persona-prompt" rows="16" placeholder="Full script the agent speaks from: who it is, the exact first line in quotes, each step, what to say to objections, and the facts it is allowed to use. A short summary is not enough."></textarea>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button type="button" class="btn-primary" onclick="savePersonaForm()">Save persona</button>
@@ -1743,7 +1745,7 @@ tbody tr:hover td { background: var(--gray-50); }
 
           <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">
             <h2>Build from a website</h2>
-            <p class="text-muted text-sm">Paste a website first. If it has no site, paste a Google Maps link or the business name. This uses APIFY_TOKEN from .env and can take about a minute.</p>
+            <p class="text-muted text-sm">Paste a website first. If it has no site, paste a Google Maps link or the business name. This writes a full call script — the exact first line, the flow, objections, and the facts — not a short summary. It uses APIFY_TOKEN from .env and can take about a minute.</p>
             <div class="form-group"><label>Website, Maps link, or business name</label>
               <input id="persona-target" placeholder="https://example.com" />
             </div>
@@ -2030,47 +2032,84 @@ async function loadLiveConfig() {
 // ═══════════════════════════════════════════════════════════════════
 // SINGLE CALL
 // ═══════════════════════════════════════════════════════════════════
-function toggleCallDetails() {
-  const body = document.getElementById('f-details-body');
-  const arrow = document.getElementById('f-details-arrow');
-  const collapsed = body.style.display === 'none';
-  body.style.display = collapsed ? '' : 'none';
-  arrow.textContent = collapsed ? '▾' : '▸';
+function callPersona() {
+  const list = _personaState.personas || [];
+  const picked = $('f-persona') ? $('f-persona').value : '';
+  if (picked) return list.find(p => p.id === picked) || null;
+  return list.find(p => p.id === _personaState.active_outbound_id) || null;
+}
+
+function renderSingleCallPersona() {
+  const summary = $('f-outbound-summary');
+  const promptEl = $('f-outbound-prompt');
+  const script = $('f-script-fields');
+  if (!summary || !promptEl) return;
+  const persona = callPersona();
+  if (!persona) {
+    summary.innerHTML = '<strong>No outbound persona is fixed.</strong><div class="text-muted text-sm">This call uses the built-in real-estate script. Choose Use outbound on a persona and this tab will speak as that persona.</div>';
+    promptEl.textContent = '';
+    promptEl.style.display = 'none';
+    if (script) script.style.display = '';
+    return;
+  }
+  if (script) script.style.display = 'none';
+  const prompt = persona.system_prompt || '';
+  const picked = $('f-persona') && $('f-persona').value;
+  const fixed = !picked || picked === _personaState.active_outbound_id;
+  const thin = prompt.trim().length < 1600;
+  summary.innerHTML =
+    `<div class="text-muted text-sm">${fixed ? 'Fixed for outbound' : 'This call only. The outbound persona stays as it is.'}</div>` +
+    `<strong>${_esc(persona.name)}</strong>` +
+    `<div class="text-muted text-sm">${_esc(persona.agent_name || 'Agent')} · ${_esc(persona.voice || 'default voice')} · ${persona.audio_mode === 'deepgram' ? 'Deepgram listens, Gemini speaks' : 'Gemini Live'}</div>` +
+    (thin
+      ? '<div class="text-sm" style="color:#b45309;margin-top:6px">This script is too short, so the agent will not know what to say. Edit it under Personas, or build it again. New builds write the full script, including the exact lines.</div>'
+      : `<div class="text-muted text-sm">${prompt.length.toLocaleString()} characters. This is the script the agent follows on this call.</div>`);
+  promptEl.style.display = '';
+  promptEl.textContent = prompt || '(This persona has no script yet.)';
 }
 
 async function submitCall(e) {
   e.preventDefault();
+  const persona = callPersona();
   const body = {
     phone: $('f-phone').value.trim(),
     lead_name: $('f-name').value.trim() || 'there',
-    business_name: $('f-biz').value.trim() || 'our company',
-    service_type: $('f-service').value.trim() || 'site visit',
-    agent_profile_id: $('f-agent-profile').value || null,
-    persona_id: $('f-persona') ? ($('f-persona').value || null) : null,
+    persona_id: persona ? persona.id : null,
     sip_provider: $('f-sip-provider').value,
   };
-  // Real estate fields — only include if filled
-  const _reFields = {
-    agent_name: $('f-agent-name').value.trim(),
-    project_name: $('f-project-name').value.trim(),
-    project_type: $('f-project-type').value.trim(),
-    project_location: $('f-project-location').value.trim(),
-    project_status: $('f-project-status').value.trim(),
-    key_benefit_1: $('f-benefit-1').value.trim(),
-    key_benefit_2: $('f-benefit-2').value.trim(),
-    key_benefit_3: $('f-benefit-3').value.trim(),
-    site_visit_day_1: $('f-sv-day1').value.trim(),
-    site_visit_day_2: $('f-sv-day2').value.trim(),
-  };
-  for (const [k, v] of Object.entries(_reFields)) { if (v) body[k] = v; }
-  if ($('f-custom-prompt-toggle').checked) body.system_prompt = $('f-custom-prompt').value;
+  const script = $('f-script-fields');
+  if (script && script.style.display !== 'none') {
+    const add = (key, id) => {
+      const el = $(id);
+      const value = el ? el.value.trim() : '';
+      if (value) body[key] = value;
+    };
+    add('agent_name', 'f-agent-name');
+    add('business_name', 'f-biz');
+    add('service_type', 'f-service');
+    add('project_name', 'f-project-name');
+    add('project_type', 'f-project-type');
+    add('project_location', 'f-project-location');
+    add('project_status', 'f-project-status');
+    add('key_benefit_1', 'f-benefit-1');
+    add('key_benefit_2', 'f-benefit-2');
+    add('key_benefit_3', 'f-benefit-3');
+    add('site_visit_day_1', 'f-sv-day1');
+    add('site_visit_day_2', 'f-sv-day2');
+    if ($('f-agent-profile') && $('f-agent-profile').value) body.agent_profile_id = $('f-agent-profile').value;
+  }
+  if ($('f-custom-prompt-toggle').checked && $('f-custom-prompt').value.trim()) {
+    body.system_prompt = $('f-custom-prompt').value;
+  }
   try {
-    const r = await apiPost('/api/call', body);
-    toast(`Call dispatched to ${r.phone} (room: ${r.room})`);
-    $('call-form').reset();
-  } catch(e) {
-    const err = await e.json().catch(() => ({}));
-    toast(err.detail || 'Dispatch failed', 'err');
+    const res = await apiPost('/api/call', body);
+    const r = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(r.detail || 'Dispatch failed');
+    toast(`Call dispatched to ${r.phone} as ${persona ? persona.name : 'the built-in script'}`);
+    $('f-phone').value = '';
+    $('f-name').value = '';
+  } catch (err) {
+    toast(err.message || 'Dispatch failed', 'err');
   }
 }
 
@@ -2641,6 +2680,7 @@ async function loadPersonas() {
   } catch (e) {
     const g = $('personas-grid');
     if (g) g.innerHTML = '<div style="color:var(--text-3)">Could not reach the app, so nothing was loaded. Restart it, then reload this page.</div>';
+    renderSingleCallPersona();
   }
 }
 
@@ -2649,11 +2689,12 @@ function loadPersonaChoices() {
   if (!sel || !_personaState.personas) return;
   const current = sel.value;
   const active = _personaState.active_outbound_id;
-  sel.innerHTML = '<option value="">— Active outbound persona —</option>' +
+  sel.innerHTML = '<option value="">Outbound persona (fixed now)</option>' +
     _personaState.personas.map(p =>
-      `<option value="${_esc(p.id)}">${_esc(p.name)} · ${p.audio_mode === 'deepgram' ? 'Deepgram' : 'Gemini'}${p.id === active ? ' (outbound now)' : ''}</option>`
+      `<option value="${_esc(p.id)}">${_esc(p.name)} · ${p.audio_mode === 'deepgram' ? 'Deepgram' : 'Gemini'}${p.id === active ? ' · outbound now' : ''}</option>`
     ).join('');
-  if (current) sel.value = current;
+  if (current && [...sel.options].some(o => o.value === current)) sel.value = current;
+  renderSingleCallPersona();
 }
 
 function renderPersonas(res) {

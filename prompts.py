@@ -1,3 +1,6 @@
+import re
+
+
 DEFAULT_SYSTEM_PROMPT = """\
 ━━━ BHASHA / LANGUAGE — SABSE PEHLE PADHO ━━━
 HAMESHA Hindi aur Hinglish mein bolo. Yeh SABSE important rule hai.
@@ -205,6 +208,34 @@ STEP 4 — CLOSE
 """
 
 
+_PLACEHOLDER = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+
+# Used only when no persona prompt is loaded, so a blank single-call form
+# still leaves the built-in real-estate script speakable.
+_BUILTIN_DEFAULTS = {
+    "service_type": "site visit",
+    "agent_name": "Priya",
+    "project_type": "property",
+    "project_status": "abhi available hai",
+    "key_benefit_1": "ek bahut acchi location hai",
+    "key_benefit_2": "investment ke liye best hai",
+    "key_benefit_3": "limited slots bache hain",
+    "site_visit_day_1": "is Saturday",
+    "site_visit_day_2": "is Sunday",
+}
+
+
+def _fill(template: str, values: dict) -> str:
+    """Replace {known_keys} only. Leave other braces alone so a long script is not dropped."""
+    def repl(match: re.Match) -> str:
+        key = match.group(1)
+        if key not in values or values[key] is None:
+            return match.group(0)
+        return str(values[key])
+
+    return _PLACEHOLDER.sub(repl, template)
+
+
 def build_prompt(
     lead_name: str = "there",
     lead_phone: str = "",
@@ -230,32 +261,36 @@ def build_prompt(
         hour = datetime.now().hour
         time_of_day = "morning" if hour < 12 else "afternoon" if hour < 17 else "evening"
 
-    if not project_name:
-        project_name = business_name
-
     if custom_prompt:
         template = custom_prompt
     elif inbound:
         template = INBOUND_SYSTEM_PROMPT
     else:
         template = DEFAULT_SYSTEM_PROMPT
-    try:
-        return template.format(
-            lead_name=lead_name,
-            lead_phone=lead_phone,
-            business_name=business_name,
-            service_type=service_type,
-            agent_name=agent_name,
-            project_name=project_name,
-            project_type=project_type,
-            project_location=project_location,
-            project_status=project_status,
-            key_benefit_1=key_benefit_1,
-            key_benefit_2=key_benefit_2,
-            key_benefit_3=key_benefit_3,
-            site_visit_day_1=site_visit_day_1,
-            site_visit_day_2=site_visit_day_2,
-            time_of_day=time_of_day,
-        )
-    except (KeyError, ValueError, IndexError):
-        return template
+
+    values = {
+        "lead_name": lead_name,
+        "lead_phone": lead_phone,
+        "business_name": business_name,
+        "service_type": service_type,
+        "agent_name": agent_name,
+        "project_name": project_name,
+        "project_type": project_type,
+        "project_location": project_location,
+        "project_status": project_status,
+        "key_benefit_1": key_benefit_1,
+        "key_benefit_2": key_benefit_2,
+        "key_benefit_3": key_benefit_3,
+        "site_visit_day_1": site_visit_day_1,
+        "site_visit_day_2": site_visit_day_2,
+        "time_of_day": time_of_day,
+    }
+    # A saved persona already says what to say. Do not pour the real-estate
+    # defaults into it. Those defaults are only for the built-in script.
+    if template is DEFAULT_SYSTEM_PROMPT:
+        for key, fallback in _BUILTIN_DEFAULTS.items():
+            if not str(values.get(key) or "").strip():
+                values[key] = fallback
+        if not str(values.get("project_name") or "").strip():
+            values["project_name"] = values.get("business_name") or "our company"
+    return _fill(template, values)

@@ -170,70 +170,227 @@ async def _scrape(target: str) -> tuple[str, str, str]:
     return "gmaps", title or query, text
 
 
+def _spoken_lines(text: str) -> int:
+    straight = re.findall(r'"[^"\n]{18,}"', text or "")
+    curly = re.findall(r"“[^”\n]{18,}”", text or "")
+    return len(straight) + len(curly)
+
+
+def _prompt_is_thin(text: str) -> bool:
+    """A usable phone prompt has a real script, not a short summary."""
+    body = (text or "").strip()
+    if len(body) < 1600:
+        return True
+    if "end_call" not in body:
+        return True
+    return _spoken_lines(body) < 6
+
+
 def _fallback_prompt(title: str, direction: str, source_text: str) -> str:
-    role = {
-        "inbound": "You answer incoming phone calls for this business.",
-        "outbound": "You place outbound phone calls for this business and try to book the next step.",
-        "both": "You handle both incoming calls and outbound calls for this business.",
-    }[direction if direction in ("inbound", "outbound", "both") else "both"]
-    opening = (
-        "As soon as the call connects, ask what they need in one short sentence. Do not greet."
-        if direction == "inbound"
-        else "As soon as the call connects, say why you are calling in one short sentence. Do not greet and do not wait for them to speak first."
+    business = title or "this business"
+    side = direction if direction in ("inbound", "outbound", "both") else "both"
+    knowledge = (source_text or "").strip()[:7000] or "No extra facts were provided. Do not invent prices, hours, or offers."
+    outbound_open = (
+        f'"Ji, main {business} se bol raha hoon. Aapke liye ek short update tha — do minute milenge?"'
     )
-    return (
-        f"You are the phone agent for {title or 'this business'}.\n"
-        f"{role}\n\n"
-        f"{opening}\n"
-        "Speak in short spoken sentences. Use only the facts below. If you do not know, say so and offer a callback.\n"
-        "Call lookup_contact only after your first sentence. Use book_appointment only after they agree to a time.\n"
-        "Always call end_call before hanging up.\n\n"
-        "KNOWLEDGE:\n"
-        f"{source_text[:6000]}\n"
+    inbound_open = (
+        f'"Ji, {business} se bol raha hoon. Bataiye, kya kaam hai?"'
     )
+    if side == "inbound":
+        first = (
+            "THIS CALL IS INBOUND. They called you. Do not greet. "
+            f"The first sentence you speak is exactly: {inbound_open}"
+        )
+    elif side == "outbound":
+        first = (
+            "THIS CALL IS OUTBOUND. You placed the call. Do not greet and do not wait for them to speak. "
+            f"The first sentence you speak is exactly: {outbound_open}"
+        )
+    else:
+        first = (
+            "If you placed the call, do not wait. The first sentence is exactly: "
+            f"{outbound_open}\n"
+            "If they called you, the first sentence is exactly: "
+            f"{inbound_open}"
+        )
+    return f"""You are the phone agent for {business}. You are not a narrator and you do not read these headings aloud.
+{first}
+Never start with hi, hello, good morning, or "am I speaking with…". One short spoken sentence, then stop and listen.
+
+GOAL
+Get the caller to the right next step for {business}: answer their question from the knowledge below, and book a time only after they agree. If you do not know a fact, say so. Never invent a price, offer, address, hour, or doctor name.
+
+LANGUAGE
+Speak the way this business's customers speak. If the knowledge is Hindi or the business is in India, speak natural Hinglish: short sentences, "ji" where it fits, English only for names and numbers. If they switch to English, switch with them. No "Certainly", "Of course", or "Absolutely".
+
+WHAT YOU SAY — follow this order. Each quoted line is something you may actually speak. One line, then wait.
+
+STEP 1 — FIRST LINE
+Outbound, you called them: {outbound_open}
+Inbound, they called you: {inbound_open}
+After that line, call lookup_contact once. Never call a tool before this first sentence.
+
+STEP 2 — WHY THIS CALL, OR WHAT THEY NEED
+Outbound: "Main isliye call kar raha hoon kyunki {business} ke baare mein ek cheez aapke kaam ki hai. Main seedha bata deta hoon."
+Then say the single most relevant fact from KNOWLEDGE, in one sentence. Do not list the whole website.
+Inbound: listen. Then repeat their need in one short line: "Samajh gaya — aapko [their need] chahiye."
+
+STEP 3 — ONE USEFUL FACT, THEN A QUESTION
+Pick one real service, offer, or detail from KNOWLEDGE. Say it in one sentence, then ask one question.
+"Isme sabse useful cheez yeh hai — [one fact from KNOWLEDGE]. Aap yeh apne liye dekh rahe hain, ya kisi aur ke liye?"
+Use their answer. Do not recite three benefits in one turn.
+
+STEP 4 — THE NEXT STEP
+Only after they show some interest, offer a time.
+"Aapko jo chahiye, woh phone pe poora clear nahi hota. Main ek time rakh deta hoon — kaun sa din aur time theek rahega?"
+If they name a day and time, call check_availability before you confirm.
+If that slot is taken: "Woh time fill ho gaya. [other time] chalega?"
+If they are unsure: "Koi baat nahi. Ek tentative time rakh deta hoon, baad mein badal sakte hain. Kaun sa din loose hai?"
+
+STEP 5 — BOOK, THEN CLOSE
+Only after they clearly agree:
+1. book_appointment with their name, phone, date, time, and the service they asked for.
+2. send_sms_confirmation with the date, time, and {business}.
+3. Say: "Ho gaya. [date] ko [time] pe aap set hain. Koi aur sawaal ho toh abhi bata dijiye."
+4. remember_details with anything useful they said (budget, who decides, what they want).
+5. end_call with outcome booked.
+
+OBJECTIONS — say the line, do not argue
+"Abhi busy hoon" → "Bilkul. Sirf ek line: [one fact from KNOWLEDGE]. Baaki aap decide kariye — baad mein call karun, ya ek time rakh dun?"
+"Interest nahi hai" → "Koi baat nahi ji. Agar baad mein chahiye ho toh {business} yahin hai. Aapka din achha rahe." Then end_call with outcome not_interested.
+"WhatsApp pe bhejo" → "Bhej deta hoon. Saath mein ek tentative time bhi rakhun, taaki slot chala na jaaye?"
+"Number kahan se mila?" → "Aap {business} ke enquiry list mein the, isliye call kiya. Timing kharab ho toh maaf kijiyega."
+"Baar baar call mat karo" → "Note kar liya. Dobara call nahi aayega. Maaf kijiyega." Then remember_details "Do not call again" and end_call with outcome not_interested.
+"Insaan se baat karni hai" → transfer_to_human and tell them you are connecting them.
+"Bot ho kya?" → "Main {business} ka phone assistant hoon. Sawal ka jawab de sakta hoon, aur time bhi rakh sakta hoon. Kya chahiye?"
+"Baad mein call karo" → "Theek hai. Kaun sa time likh lun?" Then remember_details with that time and end_call with outcome callback_requested.
+Wrong person → "Sorry, galat number lag gaya. Disturb kiya." Then end_call with outcome wrong_number.
+Voicemail → "{business} se call tha, ek short update ke liye. Jab time ho, call back kar lijiyega." Then end_call with outcome voicemail.
+Silence for several seconds → end_call with outcome no_answer. Do not fill silence with extra talk.
+
+STYLE
+One or two short sentences, then stop. No speeches. No greeting at the start. Do not say you are an AI unless they ask. Match their language. If they say wait, wait.
+
+TOOLS
+lookup_contact — once, only after the first sentence.
+check_availability — before you agree to any time.
+book_appointment — only after a clear yes.
+send_sms_confirmation — right after a booking.
+remember_details — budget, timeline, who decides, objections, callback time.
+transfer_to_human — when they ask for a person or the problem is urgent.
+end_call — every ending. Never hang up without it.
+
+The only placeholders you may see filled in later are {{lead_name}} and {{lead_phone}}. Say the person's name only after you have it. Do not read a placeholder aloud.
+
+KNOWLEDGE — these are the only facts you may use. If it is not here, you do not know it.
+{knowledge}
+"""
+
+
+def _script_instruction(title: str, direction: str, source_text: str, previous: str = "") -> str:
+    business = title or "the business in the source"
+    side = direction if direction in ("inbound", "outbound", "both") else "both"
+    rewrite = ""
+    if previous:
+        rewrite = (
+            "\nThe draft below is too short to run a live call. Rewrite it as a full script. "
+            "Keep its real facts. Add the missing spoken lines.\n\nDRAFT:\n"
+            f"{previous[:4000]}\n"
+        )
+    return f"""Write the system prompt a live phone agent will follow for {business}.
+Direction: {side}.
+Return only the prompt. No preface.
+{rewrite}
+This is the script the agent speaks from, not a summary of the website. A short paragraph is a failure.
+Length: at least 900 words. Include at least 10 lines the agent can say out loud, each inside double quotes.
+
+The agent must know, without guessing:
+- the exact first sentence, in quotes
+- why it is calling, or how it handles someone who called in
+- the services, location, hours, prices, and offers that are actually in the source
+- one question it asks after each fact
+- the line it uses to offer a time
+- a spoken reply for each objection: busy, not interested, send it on WhatsApp, where did you get my number, stop calling, I want a human, are you a bot, call me later, wrong person, voicemail
+- the exact order of tools when booking
+
+Rules:
+- Use only facts from the source. If a price, hour, address, or offer is not in the source, do not invent one. Tell the agent to say it does not know.
+- Spoken turns are one or two short sentences. Put those lines in double quotes. Do not put stage directions inside the quotes.
+- Do not open with hi, hello, good morning, or "am I speaking with".
+- Outbound: the agent placed the call and speaks first, saying why it is calling.
+- Inbound: the agent asks what the caller needs, in one sentence, with no greeting.
+- If direction is both, write both openings and label them OUTBOUND FIRST LINE and INBOUND FIRST LINE.
+- Indian or Hindi source: the quoted lines are natural Hinglish. Any other source: the quoted lines are in that language. Headings stay in English.
+- Section headings the agent does not read aloud: WHO YOU ARE, FIRST LINE, CALL FLOW, OBJECTIONS, BOOKING, STYLE, TOOLS, KNOWLEDGE.
+- KNOWLEDGE must copy the real services, area, hours, phone, prices, and common questions from the source, in enough detail that the agent can answer. Do not compress KNOWLEDGE into one sentence.
+- Tools, and only after the first sentence: lookup_contact, check_availability, book_appointment, send_sms_confirmation, remember_details, transfer_to_human, end_call.
+- lookup_contact must not run before the first sentence. end_call must run before every hangup. book_appointment only after a clear yes, and only after check_availability.
+- The only tokens you may leave for the dialer to fill are {{lead_name}} and {{lead_phone}}. Write the business name in plain text.
+
+SOURCE:
+{source_text}
+"""
+
+
+def _candidate_text(data: dict) -> tuple[str, str]:
+    candidate = ((data.get("candidates") or [{}])[0]) or {}
+    parts = ((candidate.get("content") or {}).get("parts") or [])
+    chunks = []
+    for part in parts:
+        if part.get("thought"):
+            continue
+        chunks.append(part.get("text") or "")
+    return "\n".join(chunks).strip(), str(candidate.get("finishReason") or "")
+
+
+async def _generate_script(instruction: str) -> str:
+    api_key = os.getenv("GOOGLE_API_KEY", "").strip()
+    if not api_key:
+        return ""
+    best = ""
+    async with httpx.AsyncClient(timeout=90) as client:
+        for model in ("gemini-2.5-flash", "gemini-2.0-flash"):
+            config: dict = {"temperature": 0.5, "maxOutputTokens": 8192}
+            # 2.5 Flash spends the output budget on hidden thinking unless this is 0,
+            # which was cutting the spoken script down to a short summary.
+            if model.startswith("gemini-2.5"):
+                config["thinkingConfig"] = {"thinkingBudget": 0}
+            try:
+                resp = await client.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                    params={"key": api_key},
+                    json={
+                        "contents": [{"parts": [{"text": instruction}]}],
+                        "generationConfig": config,
+                    },
+                )
+            except httpx.HTTPError:
+                continue
+            if resp.status_code >= 400:
+                continue
+            text, finish = _candidate_text(resp.json())
+            if len(text) > len(best):
+                best = text
+            if text and not _prompt_is_thin(text) and finish != "MAX_TOKENS":
+                return text
+    return best
 
 
 async def _write_prompt(title: str, direction: str, source_text: str) -> str:
-    api_key = os.getenv("GOOGLE_API_KEY", "").strip()
-    if not api_key:
-        return _fallback_prompt(title, direction, source_text)
-    instruction = (
-        "Write a complete system prompt for a live phone agent. "
-        f"The business is {title or 'the business below'}. Direction: {direction}.\n"
-        "Rules:\n"
-        "- Use only facts from the source. Never invent prices, hours, addresses, or offers.\n"
-        "- Short spoken sentences, one or two per turn. No stage directions. No markdown headings in the spoken lines.\n"
-        "- Do not open with hello, hi, or 'how can I help you'.\n"
-        "- Inbound: the first sentence asks what they need.\n"
-        "- Outbound: the first sentence says why you are calling.\n"
-        "- If the source is Indian or Hindi, write the agent's speaking rules in Hinglish. Otherwise match the source language.\n"
-        "- Include a KNOWLEDGE section: services, location, hours, phone, and real FAQs from the source.\n"
-        "- Tools the agent may use after the first sentence: lookup_contact, check_availability, "
-        "book_appointment, send_sms_confirmation, remember_details, transfer_to_human, end_call.\n"
-        "- lookup_contact must not run before the first sentence.\n"
-        "Return only the prompt.\n\n"
-        f"SOURCE:\n{source_text}"
-    )
-    async with httpx.AsyncClient(timeout=60) as client:
-        for model in ("gemini-2.5-flash", "gemini-2.0-flash"):
-            resp = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                params={"key": api_key},
-                json={
-                    "contents": [{"parts": [{"text": instruction}]}],
-                    "generationConfig": {"temperature": 0.4, "maxOutputTokens": 2500},
-                },
-            )
-            if resp.status_code >= 400:
-                continue
-            data = resp.json()
-            parts = (
-                ((data.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
-            )
-            text = "\n".join(p.get("text", "") for p in parts).strip()
-            if text:
-                return text
-    return _fallback_prompt(title, direction, source_text)
+    instruction = _script_instruction(title, direction, source_text)
+    draft = await _generate_script(instruction)
+    if draft and not _prompt_is_thin(draft):
+        return draft
+    if draft:
+        expanded = await _generate_script(_script_instruction(title, direction, source_text, draft))
+        if expanded and not _prompt_is_thin(expanded):
+            return expanded
+        if len(expanded) > len(draft):
+            draft = expanded
+    fallback = _fallback_prompt(title, direction, source_text)
+    if _prompt_is_thin(draft):
+        return fallback
+    return draft or fallback
 
 
 def _agent_name(title: str) -> str:

@@ -347,8 +347,23 @@ async def place_outbound_call(
         effective_model = effective_model or fields.get("model_override")
         effective_tools = effective_tools or fields.get("tools_override")
         effective_audio = fields.get("audio_mode")
-        if not agent_name and fields.get("agent_name"):
-            agent_name = fields["agent_name"]
+        agent_name = fields.get("agent_name") or agent_name
+        # "Green Valley Builders" is the old single-call form default, not this persona.
+        if not business_name or business_name in ("our company", "Green Valley Builders"):
+            business_name = chosen.get("name") or business_name or "our company"
+        # The persona prompt is the script. The single-call real-estate
+        # fields must not rewrite it.
+        project_name = None
+        project_type = None
+        project_location = None
+        project_status = None
+        key_benefit_1 = None
+        key_benefit_2 = None
+        key_benefit_3 = None
+        site_visit_day_1 = None
+        site_visit_day_2 = None
+        if not service_type or service_type == "site visit":
+            service_type = None
 
     if not effective_prompt:
         try:
@@ -362,11 +377,13 @@ async def place_outbound_call(
     metadata = {
         "phone_number": phone,
         "lead_name": lead_name,
-        "business_name": business_name,
-        "service_type": service_type,
         "system_prompt": effective_prompt,
         "sip_provider": sip_provider or os.getenv("SIP_PROVIDER") or await _env_or_setting("SIP_PROVIDER") or "twilio",
     }
+    if business_name:
+        metadata["business_name"] = business_name
+    if service_type:
+        metadata["service_type"] = service_type
     for field_name, value in (
         ("agent_name", agent_name),
         ("project_name", project_name),

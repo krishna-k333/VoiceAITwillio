@@ -1,19 +1,52 @@
-"""MCP server for the caller personas.
+"""Web MCP server for the caller personas.
 
-Tools match the /api/agents routes. Run it from this folder:
-
-    python mcp_server.py
-
-It reads the same local database and .env as the dashboard. Set AGENT_API_KEY
-only if another program will call the HTTP routes. This process does not need it.
+Listens on 127.0.0.1 only. Nginx publishes it at /mcp. Every request must send
+the API key as `Authorization: Bearer <AGENT_API_KEY>` or `X-API-Key`.
+The process refuses to start when AGENT_API_KEY is missing or shorter than 16 characters.
 """
 
 import os
+import secrets
+import sys
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 load_dotenv(".env")
+
+_PORT = int(os.getenv("MCP_PORT", "8766"))
+_PUBLIC_HOST = os.getenv("MCP_PUBLIC_HOST", "voicees.moorerevenue.com").strip()
+
+
+def _allowed_hosts() -> list:
+    hosts = [
+        "127.0.0.1:*",
+        "localhost:*",
+        _PUBLIC_HOST,
+        f"{_PUBLIC_HOST}:*",
+    ]
+    extra = os.getenv("MCP_ALLOWED_HOSTS", "")
+    hosts.extend(part.strip() for part in extra.split(",") if part.strip())
+    return hosts
+
+
+mcp = FastMCP(
+    "voice-agents",
+    host=os.getenv("MCP_HOST", "0.0.0.0"),
+    port=_PORT,
+    stateless_http=True,
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=_allowed_hosts(),
+        allowed_origins=[
+            f"https://{_PUBLIC_HOST}",
+            f"http://{_PUBLIC_HOST}",
+            "http://127.0.0.1:*",
+            "http://localhost:*",
+        ],
+    ),
+)
 
 from agent_service import (  # noqa: E402
     AgentError,
@@ -133,6 +166,65 @@ def edit_selected_prompt(side: str, system_prompt: str) -> dict:
         return _fail(exc)
 
 
+class _ApiKeyGate:
+    """Rejects every request that does not carry the API key. Forwards lifespan."""
+
+    def __init__(self, app, expected: str):
+        self.app = app
+        self.expected = expected
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        if not _key_ok(_presented_key(scope), self.expected):
+            body = b'{"error":"Missing or invalid API key"}'
+            await send({
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"www-authenticate", b'Bearer realm="voice-agents"'),
+                    (b"content-length", str(len(body)).encode()),
+                    (b"cache-control", b"no-store"),
+                ],
+            })
+            await send({"type": "http.response.body", "body": body})
+            return
+        await self.app(scope, receive, send)
+
+
+def _presented_key(scope) -> str:
+    headers = {
+        name.decode("latin1").lower(): value.decode("latin1")
+        for name, value in scope.get("headers", [])
+    }
+    authorization = headers.get("authorization", "")
+    if authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return headers.get("x-api-key", "").strip()
+
+
+def _key_ok(presented: str, expected: str) -> bool:
+    if not presented or len(presented) != len(expected):
+        return False
+    return secrets.compare_digest(presented, expected)
+
+
+def main() -> None:
+    key = os.getenv("AGENT_API_KEY", "").strip()
+    if len(key) < 16:
+        print(
+            "Refusing to start. Set AGENT_API_KEY in .env to a random key of at least 16 characters.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    import uvicorn
+
+    host = os.getenv("MCP_HOST", "0.0.0.0")
+    print(f"Voice agent MCP on http://{host}:{_PORT}/mcp (API key required)")
+    uvicorn.run(_ApiKeyGate(mcp.streamable_http_app(), key), host=host, port=_PORT, log_level="info")
+
+
 if __name__ == "__main__":
-    os.environ.setdefault("FASTMCP_LOG_LEVEL", "WARNING")
-    mcp.run()
+    main()

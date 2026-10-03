@@ -283,10 +283,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     persona_id: Optional[str] = None
     sip_provider = "twilio"
     is_inbound = False
+    meta: dict = {}
 
     if ctx.job.metadata:
         try:
             data = json.loads(ctx.job.metadata)
+            meta = data if isinstance(data, dict) else {}
             phone_number    = data.get("phone_number")
             lead_name       = data.get("lead_name", lead_name)
             business_name   = data.get("business_name", business_name)
@@ -382,14 +384,39 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         except Exception as _pe:
             await _log("warning", f"Could not load built-in inbound persona: {_pe}")
 
+    if custom_prompt and "THIS CALL:" not in custom_prompt:
+        if is_inbound:
+            custom_prompt += (
+                "\n\nTHIS CALL: inbound. They called you. Speak the inbound first line. Do not greet."
+            )
+        else:
+            custom_prompt += (
+                "\n\nTHIS CALL: outbound. You placed this call. "
+                "Speak the outbound first line now, in one sentence. Do not greet, and do not wait for them."
+            )
+
+    def _from_job(key: str, fallback: str) -> str:
+        # Persona scripts must not inherit the real-estate form. A field counts
+        # only when this call actually sent it.
+        if custom_prompt and key not in meta:
+            return ""
+        value = meta.get(key) if key in meta else fallback
+        return value if isinstance(value, str) else ("" if value is None else str(value))
+
     system_prompt = build_prompt(
         lead_name=lead_name, lead_phone=phone_number or "",
-        business_name=business_name, service_type=service_type,
-        agent_name=agent_name_var, project_name=project_name,
-        project_type=project_type, project_location=project_location,
-        project_status=project_status, key_benefit_1=key_benefit_1,
-        key_benefit_2=key_benefit_2, key_benefit_3=key_benefit_3,
-        site_visit_day_1=site_visit_day_1, site_visit_day_2=site_visit_day_2,
+        business_name=business_name or "our company",
+        service_type=_from_job("service_type", service_type),
+        agent_name=agent_name_var,
+        project_name=_from_job("project_name", project_name),
+        project_type=_from_job("project_type", project_type),
+        project_location=_from_job("project_location", project_location),
+        project_status=_from_job("project_status", project_status),
+        key_benefit_1=_from_job("key_benefit_1", key_benefit_1),
+        key_benefit_2=_from_job("key_benefit_2", key_benefit_2),
+        key_benefit_3=_from_job("key_benefit_3", key_benefit_3),
+        site_visit_day_1=_from_job("site_visit_day_1", site_visit_day_1),
+        site_visit_day_2=_from_job("site_visit_day_2", site_visit_day_2),
         custom_prompt=custom_prompt, inbound=is_inbound,
     )
     tool_ctx = AppointmentTools(ctx, phone_number, lead_name, is_inbound=is_inbound, persona_data=_inbound_persona_data)
