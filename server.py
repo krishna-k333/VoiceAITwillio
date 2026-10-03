@@ -655,7 +655,7 @@ async def vobiz_answer_webhook(request: Request):
     xml_content = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Dial action="https://voicees.moorerevenue.com/webhook/vobiz/dial-status" timeout="30">
-        <User>sip:moorerevenue@test-zej844je.sip.livekit.cloud:5060</User>
+        <Number>sip:moorerevenue@test-zej844je.sip.livekit.cloud:5060</Number>
     </Dial>
 </Response>"""
     return Response(content=xml_content, media_type="application/xml")
