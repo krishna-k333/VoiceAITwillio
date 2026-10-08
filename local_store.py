@@ -134,7 +134,29 @@ def get_persona(persona_id: str) -> Optional[dict]:
         row = conn.execute(
             "SELECT * FROM personas WHERE id = ?", (persona_id,)
         ).fetchone()
-    return _row(row)
+    if row:
+        return _row(row)
+    try:
+        from personas import PERSONAS
+        built_in = PERSONAS.get(persona_id)
+        if built_in:
+            return {
+                "id": persona_id,
+                "name": built_in.get("name", persona_id),
+                "agent_name": built_in.get("agent_name", ""),
+                "direction": built_in.get("direction", "both"),
+                "voice": built_in.get("voice", "Sulafat"),
+                "model": built_in.get("model", "gemini-3.1-flash-live-preview"),
+                "audio_mode": built_in.get("audio_mode", "gemini"),
+                "system_prompt": built_in.get("prompt", ""),
+                "enabled_tools": built_in.get("enabled_tools", "[]"),
+                "prompt_vars": {},
+                "created_at": "",
+                "updated_at": "",
+            }
+    except Exception:
+        pass
+    return None
 
 
 def save_persona(

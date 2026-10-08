@@ -379,17 +379,17 @@ async def place_outbound_call(
         # "Green Valley Builders" is the old single-call form default, not this persona.
         if not business_name or business_name in ("our company", "Green Valley Builders"):
             business_name = chosen.get("name") or business_name or "our company"
-        # The persona prompt is the script. The single-call real-estate
-        # fields must not rewrite it.
-        project_name = None
-        project_type = None
-        project_location = None
-        project_status = None
-        key_benefit_1 = None
-        key_benefit_2 = None
-        key_benefit_3 = None
-        site_visit_day_1 = None
-        site_visit_day_2 = None
+        # Only reset old form defaults ("Green Valley Builders"), keep custom project fields
+        if not project_name or project_name == "Green Valley Builders":
+            project_name = None
+            project_type = None
+            project_location = None
+            project_status = None
+            key_benefit_1 = None
+            key_benefit_2 = None
+            key_benefit_3 = None
+            site_visit_day_1 = None
+            site_visit_day_2 = None
         if not service_type or service_type == "site visit":
             service_type = None
 
