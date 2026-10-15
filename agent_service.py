@@ -329,6 +329,8 @@ async def place_outbound_call(
     key_benefit_3: Optional[str] = None,
     site_visit_day_1: Optional[str] = None,
     site_visit_day_2: Optional[str] = None,
+    brochure_url: Optional[str] = None,
+    audio_mode: Optional[str] = None,
 ) -> dict:
     """Dial one number with the chosen agent, or the active outbound agent."""
     url = await _env_or_setting("LIVEKIT_URL")
@@ -432,8 +434,11 @@ async def place_outbound_call(
         metadata["model_override"] = effective_model
     if effective_tools:
         metadata["tools_override"] = effective_tools
-    if effective_audio:
-        metadata["audio_mode"] = effective_audio
+    resolved_audio = audio_mode or effective_audio
+    if resolved_audio:
+        metadata["audio_mode"] = resolved_audio
+    if brochure_url:
+        metadata["brochure_url"] = brochure_url
     if chosen:
         metadata["persona_id"] = chosen["id"]
 

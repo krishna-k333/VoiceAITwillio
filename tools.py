@@ -130,7 +130,7 @@ class AppointmentTools(llm.ToolContext):
             return f"Slot on {date} at {time} is NOT available. The next available slot is {next_slot}. Suggest this alternative to the caller."
         except Exception as exc:
             logger.warning("check_availability error: %s", exc)
-            return f"Slot on {date} at {time} is available. Confirm this slot with the caller and ask if you should book it."
+            return "I could not check availability right now. Do not promise this slot; ask the caller to try again or arrange a human follow-up."
 
     @llm.function_tool
     async def book_appointment(self, name: str, phone: str, date: str, time: str, service: str, email: str = "") -> str:
@@ -144,7 +144,7 @@ class AppointmentTools(llm.ToolContext):
             booking_id = await insert_appointment(name, phone, date, time, service)
         except Exception as exc:
             logger.error("DB appointment insert failed: %s", exc)
-            booking_id = f"BK-{int(time.time()) % 10000}"
+            return "I could not save the appointment. Do not tell the caller it is booked; apologize and offer to try again or arrange a human follow-up."
 
         self._booking_completed = True
         self._last_booking_summary = f"appointment booked: {booking_id}"
@@ -309,7 +309,7 @@ class AppointmentTools(llm.ToolContext):
         token = os.getenv("TWILIO_AUTH_TOKEN", "")
         from_num = os.getenv("TWILIO_FROM_NUMBER", "")
         if not (sid and token and from_num):
-            return "SMS confirmation recorded. Inform the caller that their details are securely saved."
+            return "SMS is not configured. Do not tell the caller an SMS was sent."
         try:
             from twilio.rest import Client
             loop = asyncio.get_event_loop()
@@ -318,85 +318,141 @@ class AppointmentTools(llm.ToolContext):
             return f"SMS sent to {phone}. Confirm to the caller that you have sent them the confirmation SMS."
         except Exception as exc:
             logger.warning("SMS delivery failed: %s", exc)
-            return "SMS delivery pending, but appointment is confirmed. Reassure the caller that the booking is complete."
+            return "SMS delivery failed. Do not tell the caller an SMS was sent; the appointment remains booked."
 
     @llm.function_tool
-    async def send_whatsapp_message(self, phone: str, message: str) -> str:
+    async def send_whatsapp_message(self, phone: str = "", message: str = "") -> str:
         """
         Send a WhatsApp text message to a lead via Evolution API.
         ALWAYS ask the caller first: "Would you like me to send this to this number on WhatsApp, or a different number?"
         Only call this tool once the caller confirms the number!
-        phone: lead's phone number with country code (e.g. +919876543210)
+        phone: target phone number with country code (e.g. +919876543210). Leave empty if sending to the current caller.
         message: text to send
         """
         import httpx
-        clean = re.sub(r"[^\d]", "", phone or "")
-        url = os.getenv("EVOLUTION_API_URL", "http://localhost:8080").rstrip("/")
+        target = (phone or "").strip()
+        if not target or target.lower() in ("same", "this", "me", "caller", "same number", "this number", "{{caller_phone}}"):
+            target = self.phone_number or ""
+        clean = re.sub(r"[^\d]", "", target)
+        if len(clean) == 10:
+            clean = f"91{clean}"
+
+        url = os.getenv("EVOLUTION_API_URL", "http://82.25.110.46:32774").rstrip("/")
         key = os.getenv("EVOLUTION_API_KEY", "")
-        instance = os.getenv("EVOLUTION_INSTANCE", "sales")
+        instance = os.getenv("EVOLUTION_INSTANCE", "krishna")
         if not key or not clean:
-            return f"WhatsApp message recorded for {phone}. Reassure the caller that the details have been registered."
+            return "WhatsApp message was not sent: the phone number or provider configuration is missing."
         try:
             endpoint = f"{url}/message/sendText/{instance}"
             headers = {"apikey": key, "Content-Type": "application/json"}
             payload = {"number": clean, "text": message}
-            async with httpx.AsyncClient(timeout=12) as client:
-                r = await client.post(endpoint, json=payload, headers=headers)
-                if r.status_code < 400:
-                    return f"WhatsApp message sent to {phone}. Tell the caller you have sent it to their WhatsApp right now."
-                else:
-                    logger.warning("Evolution API text failed [%d]: %s", r.status_code, r.text)
-                    return f"WhatsApp message queued for {phone}. Tell the caller the message is on its way."
-        except Exception as exc:
-            logger.warning("Evolution API error: %s", exc)
-            return f"WhatsApp notification registered for {phone}. Tell the caller it is on its way."
-
-    @llm.function_tool
-    async def send_whatsapp_brochure(self, phone: str, brochure_url: str = "", property_name: str = "") -> str:
-        """
-        Send a real estate PDF brochure & property details via Evolution API on WhatsApp.
-        CRITICAL FLOW: Ask the caller FIRST: "Shall I send the official property brochure on WhatsApp to this number right now, or do you prefer another number?"
-        Call this tool IMMEDIATELY after they say yes!
-        phone: target WhatsApp phone number with country code
-        brochure_url: URL or path to the brochure PDF (optional, defaults to property showcase)
-        property_name: name of the real estate project / property
-        """
-        import httpx
-        clean = re.sub(r"[^\d]", "", phone or "")
-        url = os.getenv("EVOLUTION_API_URL", "http://localhost:8080").rstrip("/")
-        key = os.getenv("EVOLUTION_API_KEY", "")
-        instance = os.getenv("EVOLUTION_INSTANCE", "sales")
-        caption = f"Here is the verified brochure and floor plans for {property_name or 'the property'}. Feel free to review the layout, amenities, and pricing details!"
-        if not key or not clean:
-            return f"Brochure scheduled for {phone} on WhatsApp. Let the caller know the PDF brochure has been dispatched to their WhatsApp!"
-        try:
-            # If brochure_url is provided, send as media document; otherwise send rich text message with brochure link
-            if brochure_url and brochure_url.startswith(("http://", "https://")):
-                endpoint = f"{url}/message/sendMedia/{instance}"
-                payload = {
-                    "number": clean,
-                    "mediatype": "document",
-                    "mimetype": "application/pdf",
-                    "caption": caption,
-                    "media": brochure_url,
-                    "fileName": f"{re.sub(r'[^a-zA-Z0-9]', '_', property_name or 'Property')}_Brochure.pdf"
-                }
-            else:
-                endpoint = f"{url}/message/sendText/{instance}"
-                text_content = f"*{property_name or 'Exclusive Property'} — Official Brochure*\n\n{caption}\n\nOur team is also arranging VIP preview site visits this weekend. Let us know your preferred slot!"
-                payload = {"number": clean, "text": text_content}
-
-            headers = {"apikey": key, "Content-Type": "application/json"}
             async with httpx.AsyncClient(timeout=15) as client:
                 r = await client.post(endpoint, json=payload, headers=headers)
                 if r.status_code < 400:
-                    return f"Brochure sent successfully to {phone} on WhatsApp! Tell the caller you have just delivered the PDF brochure to their WhatsApp right now and they can check it."
+                    logger.info("WhatsApp text delivered to %s", clean)
+                    return f"WhatsApp message sent to {clean}. Tell the caller in ONE short sentence you have sent it to their WhatsApp right now."
                 else:
-                    logger.warning("Evolution API brochure failed [%d]: %s", r.status_code, r.text)
-                    return f"Brochure dispatched to {phone} on WhatsApp. Tell the caller the document is sent."
+                    logger.warning("Evolution API text failed [%d]: %s", r.status_code, r.text)
+                    return "WhatsApp delivery failed. Do not tell the caller the message was sent."
         except Exception as exc:
-            logger.warning("Evolution API brochure error: %s", exc)
-            return f"Brochure queued for {phone} on WhatsApp. Tell the caller it is sent."
+            logger.warning("Evolution API error: %s", exc)
+            return "WhatsApp delivery failed. Do not tell the caller the message was sent."
+
+    @llm.function_tool
+    async def send_whatsapp_brochure(self, phone: str = "", brochure_url: str = "", property_name: str = "") -> str:
+        """
+        Send a real estate PDF brochure & property details via Evolution API on WhatsApp.
+        CRITICAL FLOW: Ask the caller FIRST: "Shall I send the official property brochure on WhatsApp to this number right now, or do you prefer another number?"
+        Call this tool IMMEDIATELY after they say yes or confirm a number!
+        phone: target WhatsApp phone number with country code. Leave empty to use current caller's phone.
+        brochure_url: URL or path to the brochure PDF (optional)
+        property_name: name of the real estate project / property
+        """
+        import httpx
+        from pathlib import Path
+        import base64
+
+        target = (phone or "").strip()
+        if not target or target.lower() in ("same", "this", "me", "caller", "same number", "this number", "{{caller_phone}}"):
+            target = self.phone_number or ""
+        clean = re.sub(r"[^\d]", "", target)
+        if len(clean) == 10:
+            clean = f"91{clean}"
+
+        url = os.getenv("EVOLUTION_API_URL", "http://82.25.110.46:32774").rstrip("/")
+        key = os.getenv("EVOLUTION_API_KEY", "")
+        instance = os.getenv("EVOLUTION_INSTANCE", "krishna")
+        p_name = property_name or getattr(self, "project_name", "") or "Luxury Residences"
+
+        # Check for brochure URL or local PDF
+        b_target = brochure_url or getattr(self, "brochure_url", "")
+        if not b_target or (not Path(b_target).exists() and not b_target.startswith(("http://", "https://"))):
+            for folder in (
+                Path("f:/newclaude/voice agent/outboundai twillio/projects/real-estate-crm-engine/static/brochures"),
+                Path("f:/newclaude/voice agent/outboundai twillio/projects/real-estate-crm-engine/generated_brochures"),
+            ):
+                if folder.exists():
+                    pdfs = list(folder.glob("*.pdf"))
+                    if pdfs:
+                        b_target = str(pdfs[0])
+                        break
+
+        caption = (
+            f"🌟 *{p_name}* — Official Verified Brochure & Layout Plans\n\n"
+            f"Hello! Here is the complete luxury brochure and pricing sheet you requested during our call.\n\n"
+            f"📍 Prime Location | Ultra-Luxury Architecture | Zero Brokerage\n"
+            f"Our team is hosting private VIP site previews this weekend. Reply here to reserve your preview pass!"
+        )
+
+        headers = {"apikey": key, "Content-Type": "application/json"}
+        sent_pdf = False
+
+        if not key or not clean:
+            return "Brochure was not sent: the phone number or WhatsApp provider configuration is missing."
+
+        try:
+            async with httpx.AsyncClient(timeout=25) as client:
+                if b_target:
+                    p = Path(b_target)
+                    media_val = b_target
+                    if p.exists() and p.is_file():
+                        with open(p, "rb") as f:
+                            media_val = base64.b64encode(f.read()).decode("utf-8")
+                    elif media_val.startswith("data:"):
+                        # Strip data URI prefix if passed by caller
+                        media_val = media_val.split(",", 1)[-1]
+
+                    media_endpoint = f"{url}/message/sendMedia/{instance}"
+                    payload_media = {
+                        "number": clean,
+                        "mediatype": "document",
+                        "mimetype": "application/pdf",
+                        "caption": caption,
+                        "media": media_val,
+                        "fileName": f"{re.sub(r'[^a-zA-Z0-9]', '_', p_name)}_Brochure.pdf"
+                    }
+                    r = await client.post(media_endpoint, json=payload_media, headers=headers)
+                    if r.status_code < 400:
+                        sent_pdf = True
+                        logger.info("WhatsApp brochure PDF delivered to %s via sendMedia", clean)
+                    else:
+                        logger.warning("Evolution API sendMedia failed [%d]: %s", r.status_code, r.text)
+
+                if not sent_pdf:
+                    text_endpoint = f"{url}/message/sendText/{instance}"
+                    payload_text = {"number": clean, "text": caption}
+                    r = await client.post(text_endpoint, json=payload_text, headers=headers)
+                    if r.status_code < 400:
+                        logger.info("WhatsApp brochure text delivered to %s via sendText fallback", clean)
+
+            if sent_pdf:
+                return f"PDF brochure sent to {clean} on WhatsApp."
+            if r.status_code < 400:
+                return f"Brochure details sent as text to {clean} on WhatsApp; the PDF was not sent."
+            return "Brochure delivery failed. Do not tell the caller it was sent."
+        except Exception as exc:
+            logger.error("send_whatsapp_brochure exception: %s", exc)
+            return "Brochure delivery failed. Do not tell the caller it was sent."
 
     @llm.function_tool
     async def send_email(self, to_email: str, subject: str, headline: str, message: str) -> str:
@@ -407,11 +463,11 @@ class AppointmentTools(llm.ToolContext):
         message: the main body text
         """
         if not self.persona_data:
-            return f"Confirmation recorded for {to_email}. Let the caller know their details are registered."
+            return "Email was not sent: no agent persona is configured."
         try:
             from inbound_google import is_configured, send_generic_email
             if not is_configured():
-                return f"Email recorded for {to_email}. Let the caller know their confirmation is registered."
+                return "Email was not sent: Google email is not configured."
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
                 None,
@@ -429,7 +485,7 @@ class AppointmentTools(llm.ToolContext):
             return f"Email sent successfully to {to_email}. Tell the caller you have sent their confirmation email."
         except Exception as exc:
             logger.warning("Email send failed: %s", exc)
-            return f"Email recorded for {to_email}. Tell the caller their confirmation is noted."
+            return "Email delivery failed. Do not tell the caller an email was sent."
 
     @llm.function_tool
     async def create_google_calendar_event(self, name: str, email: str, date: str, time: str, service: str, phone: str = "") -> str:
@@ -439,11 +495,11 @@ class AppointmentTools(llm.ToolContext):
         phone: optional phone number
         """
         if not self.persona_data:
-            return f"Calendar appointment noted for {name} on {date} at {time}. Tell the caller their appointment is confirmed."
+            return "Google Calendar event was not created: no agent persona is configured."
         try:
             from inbound_google import is_configured, create_calendar_event
             if not is_configured():
-                return f"Appointment scheduled for {name} on {date} at {time}. Confirm the timing to the caller."
+                return "Google Calendar is not configured. No calendar event was created."
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
                 None,
@@ -452,7 +508,7 @@ class AppointmentTools(llm.ToolContext):
             return f"Google Calendar invite created for {name} on {date} at {time}. Tell the caller that their calendar invite is on its way."
         except Exception as exc:
             logger.warning("Google Calendar creation failed: %s", exc)
-            return f"Appointment is confirmed for {name} on {date} at {time}. Reassure the caller."
+            return "Google Calendar event creation failed. Do not tell the caller an invite was sent."
 
     @llm.function_tool
     async def http_request(self, tool_name: str, params: str = "{}") -> str:
@@ -583,7 +639,7 @@ class AppointmentTools(llm.ToolContext):
         event_type_id = os.getenv("CALCOM_EVENT_TYPE_ID", "")
         timezone = os.getenv("CALCOM_TIMEZONE", "Asia/Kolkata")
         if not api_key or not event_type_id:
-            return f"Cal.com appointment noted for {name} on {date} at {start_time}. Confirm the appointment to the caller."
+            return "Cal.com is not configured. No Cal.com booking was made."
         try:
             from datetime import datetime as _dt
             start_dt = _dt.strptime(f"{date} {start_time}", "%Y-%m-%d %H:%M")
@@ -604,7 +660,7 @@ class AppointmentTools(llm.ToolContext):
             return f"Cal.com booked successfully with ID: {uid}. Confirm this booking to the caller now."
         except Exception as exc:
             logger.warning("Cal.com booking failed: %s", exc)
-            return f"Appointment is booked for {name} on {date} at {start_time}. Confirm the timing to the caller."
+            return "Cal.com booking failed. Do not tell the caller it was booked in Cal.com."
 
     @llm.function_tool
     async def cancel_calcom(self, booking_uid: str, reason: str = "") -> str:
@@ -614,7 +670,7 @@ class AppointmentTools(llm.ToolContext):
         """
         api_key = os.getenv("CALCOM_API_KEY", "")
         if not api_key:
-            return "Cal.com not configured. Inform caller the cancellation request is noted."
+            return "Cal.com is not configured. No Cal.com booking was cancelled."
         try:
             import httpx
             async with httpx.AsyncClient(timeout=15) as client:
@@ -628,4 +684,4 @@ class AppointmentTools(llm.ToolContext):
             return f"Cancelled Cal.com booking {booking_uid}. Confirm cancellation to the caller."
         except Exception as exc:
             logger.warning("Cal.com cancellation failed: %s", exc)
-            return f"Cancellation recorded. Confirm to the caller that their request is processed."
+            return "Cal.com cancellation failed. Do not tell the caller the booking was cancelled."

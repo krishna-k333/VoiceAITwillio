@@ -1797,7 +1797,7 @@
                 </select></div>
             </div>
             <div class="agent-form-grid">
-              <div class="form-group"><label>Schedule Time</label><input type="time" id="camp-time" value="09:00" />
+              <div class="form-group"><label>Schedule Time (India, IST)</label><input type="time" id="camp-time" value="09:00" />
               </div>
               <div class="form-group"><label>Delay Between Calls (s)</label><input type="number" id="camp-delay"
                   value="3" min="1" /></div>
@@ -3204,7 +3204,7 @@
         let html = '<table><tr><th>Name</th><th>Schedule</th><th>Time</th><th>Status</th><th>Contacts</th><th>Dispatched</th><th>Failed</th><th>Last Run</th><th>Actions</th></tr>';
         for (const c of (campaigns || [])) {
           html += `<tr>
-        <td>${c.name || '—'}</td><td>${c.schedule_type || '—'}</td><td>${c.schedule_time || '—'}</td>
+        <td>${c.name || '—'}</td><td>${c.schedule_type || '—'}</td><td>${c.schedule_time ? c.schedule_time + ' IST' : '—'}</td>
         <td>${c.status === 'active' ? '<span class="badge badge-ok">active</span>' : '<span class="badge badge-muted">' + c.status + '</span>'}</td>
         <td>${(JSON.parse(c.contacts_json || '[]')).length}</td><td>${c.total_dispatched || 0}</td><td>${c.total_failed || 0}</td>
         <td>${(c.last_run_at || '—').slice(0, 16)}</td>

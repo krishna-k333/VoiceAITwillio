@@ -48,7 +48,15 @@ try:
     _HAS_ROOM_OPTIONS = True
 except ImportError:
     _HAS_ROOM_OPTIONS = False
-from livekit.plugins import noise_cancellation, silero
+try:
+    from livekit.plugins import silero
+except Exception:
+    silero = None
+
+try:
+    from livekit.plugins import noise_cancellation
+except Exception:
+    noise_cancellation = None
 
 from db import init_db, log_call as _db_log_call, log_call_sync as _db_log_call_sync, log_error, get_enabled_tools, get_setting
 from prompts import build_prompt, render_prompt, INBOUND_SYSTEM_PROMPT
@@ -226,8 +234,8 @@ async def _speak_opening_31(session, instructions: str) -> None:
         send = getattr(rt, "_send_client_event", None) if rt else None
         if send is None:
             if attempt < 3:
-                await _log("info", f"Gemini 3.1 session not ready yet (attempt {attempt}/3), waiting 2s...")
-                await asyncio.sleep(2)
+                await _log("info", f"Gemini 3.1 session not ready yet (attempt {attempt}/3), waiting 0.5s...")
+                await asyncio.sleep(0.5)
                 continue
             await _log("warning", "Gemini 3.1 session never became ready — falling back to generate_reply")
             await _speak_opening(session, instructions)
@@ -278,34 +286,20 @@ async def _speak_opening(session, instructions: str) -> None:
             await _log("warning", f"Could not clear buffered caller audio: {exc}")
         handle = None
         try:
-            handle = session.generate_reply(instructions=instructions)
+            handle = session.generate_reply(instructions=instructions, allow_interruptions=False)
             await asyncio.wait_for(handle.wait_for_playout(), timeout=15)
         except asyncio.TimeoutError:
             await _log("warning", f"Opening greeting timed out (attempt {attempt})")
-            try:
-                await session.interrupt()
-            except Exception:
-                pass
             continue
         except Exception as exc:
             await _log("warning", f"generate_reply failed (attempt {attempt}): {exc}")
             continue
-        interrupted = bool(getattr(handle, "interrupted", False))
         said = _spoken_from_handle(handle)
-        if not interrupted:
-            if said:
-                await _log("info", f"Opening greeting played: {said[:160]}")
-            else:
-                await _log("info", "Opening greeting playout completed successfully")
-            return
-        await _log(
-            "warning",
-            f"Opening greeting did not play (attempt {attempt}, interrupted={interrupted})",
-        )
-        try:
-            await session.interrupt()
-        except Exception:
-            pass
+        if said:
+            await _log("info", f"Opening greeting played: {said[:160]}")
+        else:
+            await _log("info", "Opening greeting playout completed successfully")
+        return
     await _log("warning", "Opening greeting did not play")
 
 
@@ -332,10 +326,15 @@ async def _log(level: str, msg: str, detail: str = "") -> None:
     if level == "info":      logger.info(msg)
     elif level == "warning": logger.warning(msg)
     else:                    logger.error(msg)
-    try:
-        await log_error("agent", msg, detail, level)
-    except Exception:
-        pass
+    # Remote log persistence must not hold up call setup or the first spoken turn.
+    if level == "info" and len(_pending_log_tasks) >= 64:
+        return
+    task = asyncio.create_task(log_error("agent", msg, detail, level))
+    _pending_log_tasks.add(task)
+    task.add_done_callback(_pending_log_tasks.discard)
+
+
+_pending_log_tasks: set[asyncio.Task] = set()
 
 
 def load_db_settings_to_env() -> None:
@@ -427,11 +426,11 @@ def _build_session(
             _realtime_input_cfg = _gt.RealtimeInputConfig(
                 automatic_activity_detection=_gt.AutomaticActivityDetection(
                     end_of_speech_sensitivity=_gt.EndSensitivity.END_SENSITIVITY_LOW,
-                    silence_duration_ms=850,
+                    silence_duration_ms=700,
                     prefix_padding_ms=250,
                 ),
             )
-            logger.info("Telephony VAD config applied (sensitivity=LOW, silence=850ms)")
+            logger.info("Telephony VAD config applied (sensitivity=LOW, silence=700ms)")
         except Exception as _cfg_err:
             logger.warning("Could not build VAD config: %s", _cfg_err)
             _realtime_input_cfg = None
@@ -439,6 +438,12 @@ def _build_session(
         realtime_kwargs: dict = dict(model=gemini_model, voice=gemini_voice, instructions=system_prompt)
         if _realtime_input_cfg is not None:
             realtime_kwargs["realtime_input_config"] = _realtime_input_cfg
+        try:
+            from google.genai import types as _gt
+            realtime_kwargs["session_resumption"] = _gt.SessionResumptionConfig(transparent=True)
+            logger.info("Gemini Live session resumption configured (transparent=True)")
+        except Exception as _re:
+            logger.debug("SessionResumptionConfig skipped: %s", _re)
 
         return AgentSession(llm=RealtimeClass(**realtime_kwargs), tools=tools)
 
@@ -468,26 +473,26 @@ def _build_session(
         'Vindemiatrix', 'Sadachbia', 'Sadaltager', 'Sulafat'
     }
     chosen_voice = gemini_voice if gemini_voice in valid_gemini_voices else "Sulafat"
+    # For Deepgram pipeline mode, use Deepgram TTS (ultra-fast <150ms, no Google TTS 429 quota limits)
     try:
+        from livekit.plugins import deepgram as _dg
+        dg_voice = "aura-arcas-en" if (gemini_voice or "").lower() in ("sulafat", "puck", "fenrir", "charon", "raj", "aoede") else "aura-asteria-en"
+        tts = _dg.TTS(model=dg_voice, api_key=os.getenv("DEEPGRAM_API_KEY"))
+        logger.info("SESSION TTS: Deepgram TTS (%s)", dg_voice)
+    except Exception as dg_exc:
+        logger.warning("Deepgram TTS failed to load, falling back to Gemini TTS: %s", dg_exc)
         from livekit.plugins.google.beta.gemini_tts import TTS as GeminiTTS
         tts = GeminiTTS(
             model="gemini-2.5-flash-preview-tts",
             voice_name=chosen_voice,
             api_key=os.getenv("GOOGLE_API_KEY"),
         )
-    except Exception as exc:
-        logger.warning("Gemini TTS could not start, checking Deepgram TTS fallback: %s", exc)
-        try:
-            from livekit.plugins import deepgram as _dg
-            tts = _dg.TTS(model="aura-asteria-en", api_key=os.getenv("DEEPGRAM_API_KEY"))
-            logger.info("Using Deepgram TTS (aura-asteria-en) as fallback")
-        except Exception as dg_exc:
-            raise RuntimeError(f"TTS could not start for Deepgram mode: {exc} | fallback error: {dg_exc}") from exc
-    # Responsive pipeline session: low endpointing delay, silero VAD tuned for telephony
+    # Responsive pipeline session: silero VAD tuned for telephony without false noise triggers
     vad = silero.VAD.load(
-        min_speech_duration=0.05,
-        min_silence_duration=0.45,
+        min_speech_duration=0.25,
+        min_silence_duration=0.55,
         prefix_padding_duration=0.3,
+        activation_threshold=0.6,
     )
     return AgentSession(
         stt=stt,
@@ -495,9 +500,11 @@ def _build_session(
         tts=tts,
         vad=vad,
         tools=tools,
-        min_endpointing_delay=0.1,
-        max_endpointing_delay=0.5,
+        min_interruption_duration=0.6,
+        min_interruption_words=2,
         allow_interruptions=True,
+        min_endpointing_delay=0.15,
+        max_endpointing_delay=0.6,
         min_consecutive_speech_delay=0.0,
     )
 
@@ -713,6 +720,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         return value if isinstance(value, str) else ("" if value is None else str(value))
 
     tool_ctx = AppointmentTools(ctx, phone_number, lead_name, is_inbound=is_inbound, persona_data=_inbound_persona_data)
+    tool_ctx.project_name = _from_job("project_name", project_name)
+    tool_ctx.brochure_url = _from_job("brochure_url", "")
 
     if tools_override:
         try:
@@ -856,11 +865,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     if audio_mode == "deepgram":
         if _deepgram_stt is None or not os.getenv("DEEPGRAM_API_KEY"):
             await _log("error", "This persona uses Deepgram, but DEEPGRAM_API_KEY is missing or the plugin is not installed")
-            ctx.shutdown()
             return
         if not os.getenv("GOOGLE_API_KEY"):
             await _log("error", "Deepgram mode still needs GOOGLE_API_KEY so Gemini can think and speak")
-            ctx.shutdown()
             return
         await _log("info", f"Building AI session — mode=deepgram+gemini model=gemini-2.5-flash voice={opening_voice}")
     else:
@@ -881,7 +888,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     # ── Inbound: extract caller number from SIP participant identity ──────────
     if is_inbound and not phone_number:
-        await asyncio.sleep(1)  # brief wait for SIP participant to join
+        if not ctx.room.remote_participants:
+            await asyncio.sleep(0.2)  # allow an arriving SIP participant to join
         for p in ctx.room.remote_participants.values():
             if p.identity.startswith("sip_") or p.identity.startswith("+"):
                 phone_number = p.identity.replace("sip_", "")
@@ -908,7 +916,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
         if not trunk_id:
             await _log("error", f"OUTBOUND_TRUNK_ID not set for provider '{sip_provider}' — cannot place outbound call")
-            ctx.shutdown()
             return
         # VoiceLink requires tech prefix prepended to the number (strip leading +)
         if sip_provider == "voicelink":
@@ -947,7 +954,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     "no_answer", f"SIP dial failed: {exc}",
                     0, None, "system",
                 )
-            ctx.shutdown()
             return
         await _log("info", f"Call ANSWERED — {phone_number} picked up, starting AI session now")
         tool_ctx._call_start_time = time.time()
@@ -1078,14 +1084,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # before speaking. Without this, the agent can speak into the void before
     # the Vobiz/SIP bridge has subscribed to the agent's audio track.
     if is_inbound:
-        for _wait in range(10):
+        for _wait in range(30):
             if any(p.identity.startswith("sip_") or p.identity.startswith("+")
                    for p in ctx.room.remote_participants.values()):
                 await _log("info", "Caller participant detected — ready to speak")
                 break
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.1)
         else:
-            await _log("warning", "No caller participant detected after 5s — speaking anyway")
+            await _log("warning", "No caller participant detected after 3s — speaking anyway")
 
     # Gemini Live stays silent until a reply is requested. Outbound still skips
     # hi/hello and speaks the script. Inbound must say a concrete sentence: the
@@ -1111,6 +1117,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         )
         if "3.1" in gemini_model and audio_mode != "deepgram":
             await _speak_opening_31(session, opening)
+        elif audio_mode == "deepgram":
+            spoken_greeting = f"Hi {lead_name}, this is {agent_name_var or 'Raj Malhotra'} calling from {business_name or 'Luxury Estates Advisory'}. Caught you for a quick 30 seconds?"
+            await _log("info", f"Speaking outbound line directly via TTS: {spoken_greeting}")
+            try:
+                handle = session.say(spoken_greeting, allow_interruptions=False)
+                await asyncio.wait_for(handle.wait_for_playout(), timeout=12)
+                await _log("info", "Opening greeting playout completed successfully via direct TTS")
+            except Exception as _ex:
+                await _log("warning", f"Direct greeting playout fallback: {_ex}")
+                await _speak_opening(session, opening)
         else:
             await _speak_opening(session, opening)
 

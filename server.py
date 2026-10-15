@@ -6,6 +6,7 @@ import logging
 import os
 import random
 import secrets
+from zoneinfo import ZoneInfo
 import ssl
 import sys
 import time
@@ -83,6 +84,8 @@ app = FastAPI(title="OutboundAI Dashboard", version="1.0.0")
 # ── Auth ──────────────────────────────────────────────────────────────────────
 _SESSIONS: dict = {}   # token → expiry timestamp
 _SESSION_TTL = 86400   # 24 hours
+_campaign_tasks: dict[str, asyncio.Task] = {}
+CAMPAIGN_TIMEZONE = ZoneInfo("Asia/Kolkata")
 
 _LOGIN_HTML = """<!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
@@ -145,6 +148,10 @@ document.getElementById('f').addEventListener('submit',async ev=>{
 def _agent_api_key_ok(request: Request) -> bool:
     expected = os.getenv("AGENT_API_KEY", "").strip()
     given = request.headers.get("x-api-key", "").strip()
+    if not given:
+        auth_header = request.headers.get("authorization", "").strip()
+        if auth_header.lower().startswith("bearer "):
+            given = auth_header[7:].strip()
     if not expected or not given or len(given) != len(expected):
         return False
     return secrets.compare_digest(given, expected)
@@ -171,7 +178,7 @@ class _AuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if not path.startswith("/api/") or path in self._PUBLIC:
             return await call_next(request)
-        if (path.startswith("/api/agents") or path.startswith("/api/personas")) and _agent_api_key_ok(request):
+        if _agent_api_key_ok(request):
             return await call_next(request)
         token = request.cookies.get("dashboard_session", "")
         if not _check_session(token):
@@ -232,6 +239,8 @@ class CallRequest(BaseModel):
     key_benefit_3: Optional[str] = None
     site_visit_day_1: Optional[str] = None
     site_visit_day_2: Optional[str] = None
+    brochure_url: Optional[str] = None
+    audio_mode: Optional[str] = None
 
 
 class AgentProfileRequest(BaseModel):
@@ -354,6 +363,8 @@ async def api_dispatch_call(req: CallRequest):
             key_benefit_3=req.key_benefit_3,
             site_visit_day_1=req.site_visit_day_1,
             site_visit_day_2=req.site_visit_day_2,
+            brochure_url=req.brochure_url,
+            audio_mode=req.audio_mode,
         )
     except AgentError as exc:
         logger.error("Dispatch error: %s", exc)
@@ -1211,7 +1222,7 @@ async def _dispatch_one(lk, lk_api, contact: dict, room_name: str,
 
 async def _run_campaign(campaign_id: str) -> None:
     campaign = await get_campaign(campaign_id)
-    if not campaign:
+    if not campaign or campaign.get("status") != "active":
         return
     contacts = json.loads(campaign.get("contacts_json") or "[]")
     if not contacts:
@@ -1241,6 +1252,10 @@ async def _run_campaign(campaign_id: str) -> None:
     try:
         lk = lk_api_module.LiveKitAPI(url=url, api_key=key, api_secret=secret, session=session)
         for i, contact in enumerate(contacts):
+            current = await get_campaign(campaign_id)
+            if not current or current.get("status") != "active":
+                logger.info("Campaign %s stopped before next contact", campaign_id)
+                break
             phone = contact.get("phone", "")
             if not phone.startswith("+"):
                 fail_count += 1
@@ -1253,14 +1268,26 @@ async def _run_campaign(campaign_id: str) -> None:
                 fail_count += 1
             if i < len(contacts) - 1:
                 await asyncio.sleep(delay)
-        await lk.aclose()
     except Exception as exc:
         logger.error("Campaign run error: %s", exc)
     finally:
+        if 'lk' in locals():
+            await lk.aclose()
         await session.close()
 
     await update_campaign_run_stats(campaign_id, ok_count, fail_count)
     logger.info("Campaign %s done — %d dispatched, %d failed", campaign_id, ok_count, fail_count)
+
+
+def _start_campaign(campaign_id: str) -> bool:
+    task = _campaign_tasks.get(campaign_id)
+    if task and not task.done():
+        return False
+    task = asyncio.create_task(_run_campaign(campaign_id))
+    _campaign_tasks[campaign_id] = task
+    task.add_done_callback(lambda done: _campaign_tasks.pop(campaign_id, None)
+                           if _campaign_tasks.get(campaign_id) is done else None)
+    return True
 
 
 async def _reschedule_all_campaigns() -> None:
@@ -1286,10 +1313,10 @@ def _schedule_campaign(campaign_id: str, schedule_type: str, schedule_time: str)
     except (ValueError, AttributeError):
         hour, minute = 9, 0
     if schedule_type == "daily":
-        trigger = CronTrigger(hour=hour, minute=minute)
+        trigger = CronTrigger(hour=hour, minute=minute, timezone=CAMPAIGN_TIMEZONE)
     else:
-        trigger = CronTrigger(day_of_week="mon-fri", hour=hour, minute=minute)
-    _scheduler.add_job(_run_campaign, trigger=trigger, args=[campaign_id], id=job_id, replace_existing=True)
+        trigger = CronTrigger(day_of_week="mon-fri", hour=hour, minute=minute, timezone=CAMPAIGN_TIMEZONE)
+    _scheduler.add_job(_start_campaign, trigger=trigger, args=[campaign_id], id=job_id, replace_existing=True)
     logger.info("Scheduled campaign %s (%s at %02d:%02d)", campaign_id, schedule_type, hour, minute)
 
 
@@ -1299,6 +1326,12 @@ async def api_create_campaign(req: CampaignRequest):
         raise HTTPException(400, "contacts list cannot be empty")
     if req.schedule_type not in ("once", "daily", "weekdays"):
         raise HTTPException(400, "schedule_type must be: once | daily | weekdays")
+    try:
+        hour, minute = map(int, req.schedule_time.split(":"))
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError
+    except (ValueError, AttributeError):
+        raise HTTPException(400, "schedule_time must be HH:MM in Asia/Kolkata")
 
     campaign_id = await create_campaign(
         name=req.name, contacts_json=json.dumps(req.contacts),
@@ -1309,7 +1342,7 @@ async def api_create_campaign(req: CampaignRequest):
     campaign = await get_campaign(campaign_id)
 
     if req.schedule_type == "once":
-        asyncio.create_task(_run_campaign(campaign_id))
+        _start_campaign(campaign_id)
     else:
         _schedule_campaign(campaign_id, req.schedule_type, req.schedule_time)
 
@@ -1337,7 +1370,10 @@ async def api_run_campaign_now(campaign_id: str):
     campaign = await get_campaign(campaign_id)
     if not campaign:
         raise HTTPException(404, "Campaign not found")
-    asyncio.create_task(_run_campaign(campaign_id))
+    if campaign.get("status") != "active":
+        raise HTTPException(409, "Activate the campaign before running it")
+    if not _start_campaign(campaign_id):
+        raise HTTPException(409, "Campaign is already running")
     return {"status": "dispatching", "campaign_id": campaign_id}
 
 
@@ -1349,7 +1385,7 @@ async def api_update_campaign_status(campaign_id: str, req: StatusRequest):
     if not ok:
         raise HTTPException(404, "Campaign not found")
     job_id = f"campaign_{campaign_id}"
-    if req.status == "paused" and _scheduler and _scheduler.get_job(job_id):
+    if req.status != "active" and _scheduler and _scheduler.get_job(job_id):
         _scheduler.remove_job(job_id)
     elif req.status == "active":
         campaign = await get_campaign(campaign_id)

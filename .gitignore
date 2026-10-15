@@ -6,3 +6,7 @@ data/*.db-shm
 __pycache__/
 
 .commandcode/
+
+# Standalone external automation projects (separately tracked / pushed git repos)
+projects/
+automations/

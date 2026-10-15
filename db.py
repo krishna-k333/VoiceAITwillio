@@ -211,7 +211,7 @@ async def clear_errors() -> None:
 # ── Appointments ──────────────────────────────────────────────────────────────
 
 async def insert_appointment(name: str, phone: str, date: str, time: str, service: str) -> str:
-    from local_store import local_insert_appointment
+    from local_store import local_insert_appointment, local_cancel_appointment
     booking_id = local_insert_appointment(name, phone, date, time, service)
     if _supabase_connected:
         try:
@@ -222,13 +222,16 @@ async def insert_appointment(name: str, phone: str, date: str, time: str, servic
                 "status": "booked", "created_at": datetime.now().isoformat(),
             }).execute()
         except Exception:
-            pass
+            local_cancel_appointment(booking_id)
+            raise
     return booking_id
 
 
 async def check_slot(date: str, time: str) -> bool:
     """Returns True if slot is available (no existing booking)."""
     from local_store import local_check_slot
+    if not local_check_slot(date, time):
+        return False
     if _supabase_connected:
         try:
             db = await _adb()
@@ -664,10 +667,17 @@ async def update_campaign_status(campaign_id: str, status: str) -> bool:
 
 async def update_campaign_run_stats(campaign_id: str, dispatched: int, failed: int) -> None:
     db = await _adb()
-    await db.table("campaigns").update({
+    campaign = await get_campaign(campaign_id)
+    if not campaign:
+        return
+    updates = {
         "last_run_at": datetime.now().isoformat(),
-        "total_dispatched": dispatched, "total_failed": failed, "status": "completed",
-    }).eq("id", campaign_id).execute()
+        "total_dispatched": int(campaign.get("total_dispatched") or 0) + dispatched,
+        "total_failed": int(campaign.get("total_failed") or 0) + failed,
+    }
+    if campaign.get("schedule_type") == "once" and campaign.get("status") == "active":
+        updates["status"] = "completed"
+    await db.table("campaigns").update(updates).eq("id", campaign_id).execute()
 
 
 async def delete_campaign(campaign_id: str) -> bool:

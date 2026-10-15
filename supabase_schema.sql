@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS appointments (
     status TEXT NOT NULL DEFAULT 'booked',
     created_at TEXT NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS one_booked_appointment_per_slot
+    ON appointments (date, time) WHERE status = 'booked';
 
 CREATE TABLE IF NOT EXISTS call_logs (
     id TEXT PRIMARY KEY,

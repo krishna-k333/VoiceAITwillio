@@ -7,6 +7,7 @@ places outbound calls, and the global AI prompt are saved here.
 import os
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -23,11 +24,16 @@ def db_path() -> str:
     return str(folder / "voice.db")
 
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect():
     conn = sqlite3.connect(db_path(), timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def init_local_db() -> None:
@@ -66,6 +72,8 @@ def init_local_db() -> None:
                 status TEXT NOT NULL DEFAULT 'booked',
                 created_at TEXT NOT NULL
             );
+            CREATE UNIQUE INDEX IF NOT EXISTS one_booked_appointment_per_slot
+                ON appointments (date, time) WHERE status = 'booked';
             CREATE TABLE IF NOT EXISTS call_logs (
                 id TEXT PRIMARY KEY,
                 phone_number TEXT NOT NULL,
@@ -363,6 +371,15 @@ def local_insert_appointment(name: str, phone: str, date: str, time: str, servic
             (booking_id, name, phone, date, time, service, now_iso)
         )
     return booking_id
+
+
+def local_cancel_appointment(appointment_id: str) -> bool:
+    with _connect() as conn:
+        result = conn.execute(
+            "UPDATE appointments SET status = 'cancelled' WHERE id = ? AND status = 'booked'",
+            (appointment_id,),
+        )
+    return result.rowcount > 0
 
 
 def local_get_all_appointments(date_filter: Optional[str] = None) -> list:
